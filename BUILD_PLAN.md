@@ -15,7 +15,7 @@ GPU node ever exists.
 
 ---
 
-## Phase 0 — Local skeleton (no AWS, ~$0)
+## Phase 0 — Local skeleton (no AWS, $0)
 
 **Goal:** the whole request path works on a laptop before any money is spent.
 
@@ -31,7 +31,7 @@ GPU node ever exists.
 local model; killing the model pod makes the same call return a Claude API
 completion with a `x-served-by: anthropic` header.
 
-## Phase 1 — Terraform foundation on AWS (~$ small, no GPU yet)
+## Phase 1 — Terraform foundation on AWS ($ small, no GPU yet)
 
 **Goal:** credential-free infrastructure with cost guardrails first.
 
