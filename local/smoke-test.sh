@@ -30,7 +30,7 @@ echo "== 2. Model scaled to zero (fallback) =="
 kubectl -n llm scale deployment/local-model --replicas=0
 kubectl -n llm wait --for=delete pod -l app=local-model --timeout=60s || true
 date -u +%FT%TZ
-read -r code secs <<< "$(ask)"; echo "HTTP $code in ${secs}s (fallback should take ~2s at most)"
+read -r code secs <<< "$(ask)"; echo "HTTP $code in ${secs}s (expect ~2s connect timeout + Claude API time)"
 grep -iE '^x-(served-by|fallback-reason)' /tmp/gw-headers || true
 jq . /tmp/gw-body
 echo "-- gateway log for this request:"

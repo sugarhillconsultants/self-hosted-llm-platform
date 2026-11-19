@@ -105,6 +105,19 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 > Nothing below is filled in until it has actually happened. Paste real
 > output, not expected output. If a number is from a single run, say so.
 
+Phase 0, local (kind on an Apple Silicon Mac, 2026-11-19). Full output:
+[`docs/evidence/phase-0.md`](docs/evidence/phase-0.md).
+
+```
+POST /v1/chat (local Qwen2.5-0.5B, CPU) → 200, x-served-by: self_hosted, 0.25s
+POST /v1/chat (model scaled to zero)    → 200, x-served-by: anthropic,
+                                           x-fallback-reason: connect_timeout, 3.08s
+                                           (was ~30s then HTTP 400 before incidents #2, #3)
+gateway_fallbacks_total{reason="connect_timeout"} → 1
+```
+
+AWS (Phases 1–7), not yet run:
+
 ```
 terraform apply (envs/demo)            → <resources created, duration>
 kubectl get nodes (GPU group at 0)     → <output>
@@ -180,4 +193,8 @@ make loadtest && make eval
 
 <!-- Fill from real limitations found during the build, the same way
      incident #11 in log-anomaly-platform became a "next" item. -->
-- 
+- **Measure what the caller waits, not just the backend that answered.**
+  On the Phase 0 fallback run, `latency_ms` said 1.07 s while the caller
+  waited 3.08 s: the 2.00 s lost on the failed self-hosted attempt shows up
+  nowhere. Add an end-to-end request duration (response field + histogram,
+  labeled with whether a fallback happened) in Phase 4.

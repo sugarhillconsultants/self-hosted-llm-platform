@@ -85,11 +85,16 @@ the old code returned 400, the fixed code returns 200 from the fallback.
 The same smoke run showed the self-hosted failure as `timeout`, not the
 expected `connect_error`. A Service whose only pod is gone *should* refuse
 connections quickly, but this request hung until the 30-second limit. The
-likely cause (not yet confirmed on the Mac) is the gap between `kubectl wait
---for=delete` returning and the cluster's routing catching up: for a moment the
-Service still points at the deleted pod's IP, and packets to an IP with nothing
-behind it are dropped silently rather than refused, so the connection attempt
-just hangs. Whatever the exact trigger, the design flaw is the same: **one
+likely cause is the gap between `kubectl wait --for=delete` returning and the
+cluster's routing catching up: for a moment the Service still points at the
+deleted pod's IP, and packets to an IP with nothing behind it are dropped
+silently rather than refused, so the connection attempt just hangs. **Confirmed
+on the Mac after the fix:** the rerun failed with `connect_timeout` after
+exactly 2.00 s, meaning the TCP connection was never established and never
+refused. That is the silent-drop behavior, not a slow model. (Whether the
+drop comes from a stale endpoint or from the empty Service itself wasn't
+isolated; the fix doesn't depend on which.)
+Whatever the exact trigger, the design flaw is the same: **one
 30-second timeout covered both "never connected" and "connected, still
 generating."** Generation can legitimately take 30 s on a CPU model; failing to
 open a TCP connection should be known in about 2 s. Fixed by giving each backend
@@ -97,8 +102,10 @@ a separate connect timeout (2 s self-hosted, 5 s Claude API) and a separate
 `connect_timeout` failure reason. Reproduced in a sandbox with a listener whose
 accept queue is full (Linux then drops new SYNs, the same symptom): the old code
 took 5.0 s (with a 5 s timeout) and failed, the fixed code fell back and
-answered in 2.0 s. `smoke-test.sh` now prints each request's total time so the
-Mac run can confirm this.
+answered in 2.0 s. On the Mac, the fixed gateway answered from the fallback in
+3.08 s end to end (2.00 s connect timeout + 1.07 s Claude API), where the
+first run had waited ~30 s and then failed. Evidence:
+[`docs/evidence/phase-0.md`](evidence/phase-0.md).
 
 ---
 
