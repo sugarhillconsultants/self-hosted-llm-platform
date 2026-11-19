@@ -1,4 +1,6 @@
-# Self-Hosted LLM Inference & Evaluation Platform
+# Self-Hosted LLM Platform
+
+Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-zero), with an LLM gateway for routing, fallback and cost control, and a CI eval gate that blocks regressions.
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-In_Progress-yellow?style=flat-square)

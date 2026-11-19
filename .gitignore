@@ -1,0 +1,25 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+crash.log
+override.tf
+override.tf.json
+*.auto.tfvars
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+# Secrets / local
+.env
+*.pem
+kubeconfig*
+# Model weights never go in git
+*.safetensors
+*.gguf
+models/
+# Eval run outputs (baselines ARE committed)
+evals/reports/*
+!evals/reports/.gitkeep
