@@ -14,14 +14,14 @@ TOKEN=$(curl -sf "$URL/token" -H 'content-type: application/json' \
   -d "{\"client_id\":\"$CLIENT_ID\",\"client_secret\":\"$CLIENT_SECRET\"}" | jq -r .access_token)
 
 ask() {
-  curl -s -D /tmp/gw-headers -o /tmp/gw-body -w '%{http_code}' "$URL/v1/chat" \
+  curl -s -D /tmp/gw-headers -o /tmp/gw-body -w '%{http_code} %{time_total}' "$URL/v1/chat" \
     -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
     -d '{"messages":[{"role":"user","content":"In one sentence, what does a Kubernetes readiness probe do?"}],"max_tokens":80}'
 }
 
 echo "== 1. Self-hosted model =="
 date -u +%FT%TZ
-code=$(ask); echo "HTTP $code"
+read -r code secs <<< "$(ask)"; echo "HTTP $code in ${secs}s"
 grep -iE '^x-(served-by|fallback-reason)' /tmp/gw-headers || true
 jq . /tmp/gw-body
 
@@ -30,9 +30,11 @@ echo "== 2. Model scaled to zero (fallback) =="
 kubectl -n llm scale deployment/local-model --replicas=0
 kubectl -n llm wait --for=delete pod -l app=local-model --timeout=60s || true
 date -u +%FT%TZ
-code=$(ask); echo "HTTP $code"
+read -r code secs <<< "$(ask)"; echo "HTTP $code in ${secs}s (fallback should take ~2s at most)"
 grep -iE '^x-(served-by|fallback-reason)' /tmp/gw-headers || true
 jq . /tmp/gw-body
+echo "-- gateway log for this request:"
+kubectl -n llm logs deploy/gateway --since=60s | grep -E 'WARNING|served_by=anthropic' | tail -3
 
 echo
 echo "== Restoring the model =="

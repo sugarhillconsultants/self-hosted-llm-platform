@@ -61,7 +61,7 @@ make local-down  # when finished
 
 ## Pre-deployment checks already done (in a cloud sandbox, not on this machine)
 
-- 33 unit tests passing (`make test`).
+- 41 unit tests passing (`make test`).
 - Gateway run under uvicorn against a fake OpenAI-compatible server: 200 with
   `x-served-by: self_hosted`; with the server stopped and no API key, 502 listing
   `self_hosted: connect_error` and `anthropic: not_configured`; metrics counted

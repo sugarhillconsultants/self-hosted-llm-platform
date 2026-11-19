@@ -18,13 +18,16 @@ class OpenAICompatProvider:
         model: str,
         *,
         timeout_s: float,
+        connect_timeout_s: float = 2.0,
         name: str = "self_hosted",
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.name = name
         self.model = model
         self._client = httpx.AsyncClient(
-            base_url=base_url, timeout=httpx.Timeout(timeout_s), transport=transport
+            base_url=base_url,
+            timeout=httpx.Timeout(timeout_s, connect=connect_timeout_s),
+            transport=transport,
         )
 
     async def complete(
@@ -38,6 +41,10 @@ class OpenAICompatProvider:
         }
         try:
             resp = await self._client.post("/v1/chat/completions", json=body)
+        except httpx.ConnectTimeout as exc:
+            # Checked before TimeoutException (its parent): "never connected"
+            # and "connected but slow to generate" are different failures.
+            raise ProviderError("connect_timeout", f"{self.name} connect timed out", retryable=True) from exc
         except httpx.TimeoutException as exc:
             raise ProviderError("timeout", f"{self.name} timed out", retryable=True) from exc
         except httpx.TransportError as exc:

@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-In_Progress-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-1_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-3_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -89,7 +89,7 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `k8s/observability/` | Prometheus scrape config, Grafana dashboards (JSON), OTel collector |
 | `gateway/app/` | FastAPI gateway: client-credentials JWT auth, routing, fallback, Prometheus metrics (quotas, cost metering and OTel in Phases 4 and 6) |
 | `gateway/app/providers/` | One adapter per backend behind a common interface: `openai_compat.py` (vLLM or llama.cpp) and `anthropic.py` |
-| `gateway/tests/` | Router, API and provider tests with mocked backends (33 tests) |
+| `gateway/tests/` | Router, API and provider tests with mocked backends (41 tests) |
 | `evals/golden/` | Versioned golden eval sets (JSONL), one per capability |
 | `evals/scorers/` | Exact-match, groundedness, refusal-correctness, and LLM-as-judge scorers |
 | `evals/baselines/` | Last accepted scores per model/prompt version — what the CI gate compares against |
@@ -145,11 +145,19 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-One incident so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+Three incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
 
 - Request models defined inside the FastAPI app factory were silently read
   as missing query parameters, because of postponed annotations. Caught by
   the test suite before anything was deployed.
+- The first real fallback test failed with a 400: the Claude API now rejects
+  `temperature` for the fallback model. Mocked tests couldn't see it. It also
+  showed the gateway discarding the upstream error text and blaming the
+  client for a gateway fault; both fixed.
+- With the model gone, requests hung for the full 30-second timeout before
+  failing over, because one timeout covered both "can't connect" and "still
+  generating." Split into a 2-second connect timeout and a separate generation
+  timeout.
 
 ## Running it
 

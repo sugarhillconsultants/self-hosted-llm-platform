@@ -39,10 +39,18 @@ fi
 source "$ENV_FILE"
 
 kubectl apply -k "$ROOT/k8s/base"
+# Keep a previously stored API key when this terminal doesn't have one
+# exported, rather than silently replacing it with an empty value.
+API_KEY="${ANTHROPIC_API_KEY:-}"
+if [[ -z "$API_KEY" ]]; then
+  API_KEY="$(kubectl -n llm get secret gateway-secrets \
+    -o jsonpath='{.data.ANTHROPIC_API_KEY}' 2>/dev/null | base64 --decode 2>/dev/null || true)"
+  [[ -n "$API_KEY" ]] && echo "Using the ANTHROPIC_API_KEY already stored in the cluster."
+fi
 kubectl -n llm create secret generic gateway-secrets \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
   --from-literal=CLIENTS="$CLIENT_ID:$CLIENT_SECRET" \
-  --from-literal=ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
+  --from-literal=ANTHROPIC_API_KEY="$API_KEY" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 kubectl kustomize "$ROOT/k8s/overlays/local" \
@@ -58,5 +66,5 @@ kubectl -n llm rollout status deployment/local-model --timeout=900s
 
 echo
 echo "Ready: gateway on http://localhost:8000 (image gateway:$TAG)"
-[[ -z "${ANTHROPIC_API_KEY:-}" ]] && echo "Note: ANTHROPIC_API_KEY not set, so fallback will return 502."
+[[ -z "$API_KEY" ]] && echo "Note: no ANTHROPIC_API_KEY set or stored, so fallback will return 502."
 echo "Next: ./local/smoke-test.sh"

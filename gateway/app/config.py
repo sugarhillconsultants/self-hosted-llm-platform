@@ -37,12 +37,20 @@ class Settings:
     self_hosted_url: str = "http://localhost:8080"
     self_hosted_model: str = "local-model"
     self_hosted_timeout_s: float = 30.0
+    # Separate, short connect timeout: generating tokens can legitimately take
+    # 30s, but failing to even open a connection should be known in ~2s so the
+    # fallback isn't delayed (incident #3).
+    self_hosted_connect_timeout_s: float = 2.0
 
     # Fallback backend.
     anthropic_api_key: str | None = None
     anthropic_model: str = "claude-haiku-5-5"
     anthropic_url: str = "https://api.anthropic.com"
     anthropic_timeout_s: float = 60.0
+    anthropic_connect_timeout_s: float = 5.0
+    # Newer Claude models reject `temperature` with a 400 (incident #2), so it
+    # is not sent unless explicitly enabled for a model that accepts it.
+    anthropic_send_temperature: bool = False
 
     # Which backend "auto" routing tries first.
     primary_backend: str = "self_hosted"
@@ -73,10 +81,13 @@ class Settings:
             self_hosted_url=env.get("SELF_HOSTED_URL", cls.self_hosted_url).rstrip("/"),
             self_hosted_model=env.get("SELF_HOSTED_MODEL", cls.self_hosted_model),
             self_hosted_timeout_s=float(env.get("SELF_HOSTED_TIMEOUT_S", "30")),
+            self_hosted_connect_timeout_s=float(env.get("SELF_HOSTED_CONNECT_TIMEOUT_S", "2")),
             anthropic_api_key=env.get("ANTHROPIC_API_KEY") or None,
             anthropic_model=env.get("ANTHROPIC_MODEL", cls.anthropic_model),
             anthropic_url=env.get("ANTHROPIC_URL", cls.anthropic_url).rstrip("/"),
             anthropic_timeout_s=float(env.get("ANTHROPIC_TIMEOUT_S", "60")),
+            anthropic_connect_timeout_s=float(env.get("ANTHROPIC_CONNECT_TIMEOUT_S", "5")),
+            anthropic_send_temperature=env.get("ANTHROPIC_SEND_TEMPERATURE", "false").lower() == "true",
             primary_backend=primary,
             fallback_enabled=env.get("FALLBACK_ENABLED", "true").lower() == "true",
             max_tokens_limit=int(env.get("MAX_TOKENS_LIMIT", "2048")),

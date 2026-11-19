@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Literal
@@ -10,6 +11,8 @@ from . import metrics
 from .providers.base import Completion, Message, Provider, ProviderError
 
 BackendChoice = Literal["auto", "self_hosted", "anthropic"]
+
+log = logging.getLogger("gateway")
 
 
 @dataclass
@@ -28,11 +31,13 @@ class AllBackendsFailed(Exception):
 
     @property
     def status(self) -> int:
-        # Pass a non-retryable client error (bad request) through as-is;
-        # anything else means the gateway couldn't reach a working backend.
-        last = self.errors[-1][1]
-        if not last.retryable and last.status and 400 <= last.status < 500:
-            return last.status
+        # Only the FIRST backend's verdict can say the client's request was bad.
+        # A 400 from the fallback, after the primary failed for its own reasons,
+        # means the gateway built a request that backend rejects: a gateway
+        # fault, so 502 (incident #2 surfaced as a misleading 400).
+        first = self.errors[0][1]
+        if not first.retryable and first.status and 400 <= first.status < 500:
+            return first.status
         return 502
 
 
@@ -72,6 +77,13 @@ class Router:
                 )
             except ProviderError as err:
                 metrics.REQUESTS.labels(name, "error").inc()
+                # The full upstream message goes to the log; only the short
+                # reason goes to metrics and clients (incident #2: the reason
+                # "upstream_4xx" alone didn't say what was wrong).
+                log.warning(
+                    "backend %s failed after %.2fs: reason=%s status=%s retryable=%s: %s",
+                    name, time.perf_counter() - start, err.reason, err.status, err.retryable, err,
+                )
                 errors.append((name, err))
                 if not err.retryable:
                     break

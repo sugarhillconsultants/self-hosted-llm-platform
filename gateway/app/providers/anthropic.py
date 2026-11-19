@@ -20,14 +20,19 @@ class AnthropicProvider:
         model: str,
         *,
         timeout_s: float,
+        connect_timeout_s: float = 5.0,
+        send_temperature: bool = False,
         base_url: str = "https://api.anthropic.com",
         transport: httpx.AsyncBaseTransport | None = None,
     ):
         self.name = "anthropic"
         self.model = model
         self._api_key = api_key
+        self._send_temperature = send_temperature
         self._client = httpx.AsyncClient(
-            base_url=base_url, timeout=httpx.Timeout(timeout_s), transport=transport
+            base_url=base_url,
+            timeout=httpx.Timeout(timeout_s, connect=connect_timeout_s),
+            transport=transport,
         )
 
     async def complete(
@@ -41,15 +46,20 @@ class AnthropicProvider:
         body: dict = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "temperature": temperature,
             "messages": [m.model_dump() for m in messages if m.role != "system"],
         }
+        # Off by default: newer models answer `temperature` with a 400
+        # ("`temperature` is deprecated for this model."), incident #2.
+        if self._send_temperature:
+            body["temperature"] = temperature
         if system:
             body["system"] = system
 
         headers = {"x-api-key": self._api_key, "anthropic-version": API_VERSION}
         try:
             resp = await self._client.post("/v1/messages", json=body, headers=headers)
+        except httpx.ConnectTimeout as exc:
+            raise ProviderError("connect_timeout", "anthropic connect timed out", retryable=True) from exc
         except httpx.TimeoutException as exc:
             raise ProviderError("timeout", "anthropic timed out", retryable=True) from exc
         except httpx.TransportError as exc:

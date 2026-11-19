@@ -52,6 +52,54 @@ with a comment explaining why. **Found before anything was deployed**, by the
 tests, which is the argument for writing them first. A route that silently
 misreads its own input would have looked like a client bug from the outside.
 
+## 2. The fallback backend rejected a parameter the gateway added, and the client was told its own request was bad
+
+The first real `make smoke` on a Mac (kind, Docker 29.1.3, Apple Silicon)
+passed the self-hosted half: a real completion from Qwen2.5-0.5B through the
+gateway in 253 ms. The fallback half returned **HTTP 400** with
+`{"backend":"anthropic","reason":"upstream_4xx"}`. Two things pointed away from
+the obvious suspects: the API key had just worked in a direct `curl` with the
+same model, and a bad key returns 401, not 400. The one difference between that
+`curl` and the gateway's request was `temperature`. Repeating the `curl` with
+`"temperature":0.2` reproduced it: `invalid_request_error: "`temperature` is
+deprecated for this model."` The provider adapter had been written to the
+long-standing shape of the Messages API, and the default fallback model
+(`claude-haiku-5-5`) no longer accepts that field. Unit tests couldn't catch
+this: they mock the API, and the mock accepted whatever it was sent.
+
+The incident also exposed two gaps in the gateway itself. **(a)** It recorded
+only the short reason `upstream_4xx`; Anthropic's actual message, which named
+the problem exactly, was thrown away, so diagnosis needed a manual `curl`.
+**(b)** It passed the fallback's 400 through to the client, telling a caller
+whose request was perfectly valid that it had sent a bad request. Fixes:
+`temperature` is no longer sent to the Claude API unless
+`ANTHROPIC_SEND_TEMPERATURE=true`; every backend failure is logged with its
+full upstream message, status and elapsed time; and only the *first* backend's
+4xx is passed through as a client error, while a 4xx from the fallback after a
+primary failure becomes a 502. Regression tests cover all three. Reproduced
+before and after against a fake API that rejects `temperature` the same way:
+the old code returned 400, the fixed code returns 200 from the fallback.
+
+## 3. With the model scaled to zero, the gateway waited for the full 30-second timeout instead of failing over at once
+
+The same smoke run showed the self-hosted failure as `timeout`, not the
+expected `connect_error`. A Service whose only pod is gone *should* refuse
+connections quickly, but this request hung until the 30-second limit. The
+likely cause (not yet confirmed on the Mac) is the gap between `kubectl wait
+--for=delete` returning and the cluster's routing catching up: for a moment the
+Service still points at the deleted pod's IP, and packets to an IP with nothing
+behind it are dropped silently rather than refused, so the connection attempt
+just hangs. Whatever the exact trigger, the design flaw is the same: **one
+30-second timeout covered both "never connected" and "connected, still
+generating."** Generation can legitimately take 30 s on a CPU model; failing to
+open a TCP connection should be known in about 2 s. Fixed by giving each backend
+a separate connect timeout (2 s self-hosted, 5 s Claude API) and a separate
+`connect_timeout` failure reason. Reproduced in a sandbox with a listener whose
+accept queue is full (Linux then drops new SYNs, the same symptom): the old code
+took 5.0 s (with a 5 s timeout) and failed, the fixed code fell back and
+answered in 2.0 s. `smoke-test.sh` now prints each request's total time so the
+Mac run can confirm this.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

@@ -60,11 +60,14 @@ def build_router(settings: Settings) -> Router:
             settings.self_hosted_url,
             settings.self_hosted_model,
             timeout_s=settings.self_hosted_timeout_s,
+            connect_timeout_s=settings.self_hosted_connect_timeout_s,
         ),
         "anthropic": AnthropicProvider(
             settings.anthropic_api_key,
             settings.anthropic_model,
             timeout_s=settings.anthropic_timeout_s,
+            connect_timeout_s=settings.anthropic_connect_timeout_s,
+            send_temperature=settings.anthropic_send_temperature,
             base_url=settings.anthropic_url,
         ),
     }
