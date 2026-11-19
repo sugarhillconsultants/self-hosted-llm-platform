@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-In_Progress-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-0_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-1_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -83,18 +83,21 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `infra/terraform/envs/demo` | The one environment, composed from the modules |
 | `k8s/vllm/` | vLLM Deployment/Service, model + adapter config, GPU tolerations |
 | `k8s/keda/` | ScaledObject: scale vLLM on waiting-request queue depth, not CPU; to zero when idle |
-| `k8s/gateway/` | Gateway Deployment, Service, Ingress, HPA |
+| `k8s/gateway/` | Gateway Deployment and Service (Ingress and HPA come in Phase 4) |
+| `k8s/local-model/` | Phase 0 stand-in for vLLM: llama.cpp server on CPU, same OpenAI-compatible API |
+| `k8s/overlays/local/` | kind overlay: base + gateway + local model + NodePort on localhost:8000 |
 | `k8s/observability/` | Prometheus scrape config, Grafana dashboards (JSON), OTel collector |
-| `gateway/app/` | FastAPI gateway: auth, routing, fallback, per-client token quotas, cost metering, OTel |
-| `gateway/app/providers/` | One adapter per backend (`vllm.py`, `anthropic.py`) behind a common interface |
+| `gateway/app/` | FastAPI gateway: client-credentials JWT auth, routing, fallback, Prometheus metrics (quotas, cost metering and OTel in Phases 4 and 6) |
+| `gateway/app/providers/` | One adapter per backend behind a common interface: `openai_compat.py` (vLLM or llama.cpp) and `anthropic.py` |
+| `gateway/tests/` | Router, API and provider tests with mocked backends (33 tests) |
 | `evals/golden/` | Versioned golden eval sets (JSONL), one per capability |
 | `evals/scorers/` | Exact-match, groundedness, refusal-correctness, and LLM-as-judge scorers |
 | `evals/baselines/` | Last accepted scores per model/prompt version — what the CI gate compares against |
 | `prompts/` | Versioned prompt templates; a change here triggers the eval gate |
 | `loadtest/` | Load scripts that produce the latency/cost numbers in this README |
-| `local/` | kind cluster + CPU-quantized model config for building without paying for a GPU |
+| `local/` | `kind-up.sh`, `kind-down.sh`, `smoke-test.sh`: the Phase 0 request path on a laptop, no GPU, no AWS bill |
 | `scripts/` | `up.sh` / `down.sh` / `cost-report.sh` |
-| `.github/workflows/` | `terraform.yml`, `build.yml`, `eval-gate.yml`, `deploy.yml` |
+| `.github/workflows/` | `test.yml` (gateway tests + image build) now; `terraform.yml`, `eval-gate.yml`, `deploy.yml` in later phases |
 | `docs/` | Build plan, architecture, ADRs, incidents, evidence (screenshots, raw outputs) |
 
 ## Verified results
@@ -142,13 +145,21 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-_No incidents recorded yet._ See [`docs/incidents.md`](docs/incidents.md).
+One incident so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+
+- Request models defined inside the FastAPI app factory were silently read
+  as missing query parameters, because of postponed annotations. Caught by
+  the test suite before anything was deployed.
 
 ## Running it
 
 ```bash
-# Local (no GPU, no AWS bill)
-./local/kind-up.sh && make local-deploy && make eval
+# Local (no GPU, no AWS bill). Needs Docker Desktop, kind, kubectl, jq.
+export ANTHROPIC_API_KEY=sk-ant-...   # optional: enables the fallback path
+make test          # gateway unit tests
+make local-up      # kind cluster + gateway + small CPU model
+make smoke         # the Phase 0 gate: self-hosted answer, then fallback
+make local-down
 
 # AWS (costs money — see the table above)
 cd infra/terraform/bootstrap && terraform apply   # once

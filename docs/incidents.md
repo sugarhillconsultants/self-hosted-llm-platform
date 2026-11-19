@@ -35,9 +35,22 @@ Rules:
   - Never smooth over a step that took several attempts.
 -->
 
-## 1. <title>
+## 1. Request models defined inside the app factory were silently treated as query parameters
 
-<narrative>
+The first run of the gateway's test suite failed 9 of 33 tests, and every
+failure was a `422` where a `200` or `401` was expected. Calling `POST /token`
+directly showed why: `{"type":"missing","loc":["query","body"],"msg":"Field
+required"}`. FastAPI thought the JSON body was a missing **query** parameter
+named `body`. The cause was a combination of two individually reasonable
+choices: the Pydantic request models (`TokenRequest`, `ChatRequest`) were
+defined *inside* `create_app()`, and `main.py` uses `from __future__ import
+annotations`, so every annotation is stored as a string. FastAPI resolves those
+strings against the module's globals, where local classes don't exist; when
+resolution fails it falls back to treating the parameter as a plain query
+value, with no error at startup. Fixed by moving the models to module level,
+with a comment explaining why. **Found before anything was deployed**, by the
+tests, which is the argument for writing them first. A route that silently
+misreads its own input would have looked like a client bug from the outside.
 
 ---
 

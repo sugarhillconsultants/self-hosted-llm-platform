@@ -1,0 +1,62 @@
+# Local stand-in for vLLM: llama.cpp's server runs a small quantized model on
+# CPU and exposes the same OpenAI-compatible /v1/chat/completions API, so the
+# gateway's self_hosted provider is identical locally and on EKS.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-model
+  namespace: llm
+  labels: {app: local-model}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: local-model}
+  template:
+    metadata:
+      labels: {app: local-model}
+    spec:
+      containers:
+        - name: llama-server
+          # TODO after first successful pull: pin to the digest
+          # (kubectl get pod -l app=local-model -n llm -o jsonpath='{..imageID}')
+          image: ghcr.io/ggml-org/llama.cpp:server
+          args:
+            - --hf-repo
+            - Qwen/Qwen2.5-0.5B-Instruct-GGUF
+            - --hf-file
+            - qwen2.5-0.5b-instruct-q4_k_m.gguf
+            - --alias
+            - local-model
+            - --host
+            - 0.0.0.0
+            - --port
+            - "8080"
+            - --ctx-size
+            - "4096"
+          env:
+            - name: LLAMA_CACHE
+              value: /models
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - name: models
+              mountPath: /models
+          # llama.cpp's /health returns 503 while the model downloads and
+          # loads, 200 once it can serve: a correct readiness signal.
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 10
+            failureThreshold: 60   # up to 10 min for the first download
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: "1", memory: 1Gi}
+            limits: {memory: 2Gi}
+      volumes:
+        # Survives pod restarts on the same node, so killing the pod for the
+        # fallback test doesn't re-download the model.
+        - name: models
+          hostPath:
+            path: /var/local/llm-models
+            type: DirectoryOrCreate

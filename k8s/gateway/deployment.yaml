@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: llm
+  labels: {app: gateway}
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: gateway}
+  template:
+    metadata:
+      labels: {app: gateway}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: gateway
+          # Overridden per environment: a local tag in kind, an immutable
+          # commit-SHA tag from ECR on EKS. Never :latest (log-anomaly #5).
+          image: gateway
+          ports:
+            - containerPort: 8000
+          env:
+            - name: SELF_HOSTED_URL
+              value: http://local-model.llm.svc.cluster.local:8080
+            - name: SELF_HOSTED_MODEL
+              value: local-model
+          envFrom:
+            - secretRef:
+                name: gateway-secrets
+          readinessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: 8000}
+            periodSeconds: 20
+          resources:
+            requests: {cpu: 100m, memory: 128Mi}
+            limits: {memory: 256Mi}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
