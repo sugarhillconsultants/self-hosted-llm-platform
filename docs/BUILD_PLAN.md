@@ -35,19 +35,23 @@ completion with a `x-served-by: anthropic` header.
 
 **Goal:** credential-free infrastructure with cost guardrails first.
 
-- `bootstrap/`: S3 state bucket, DynamoDB lock table, GitHub OIDC provider,
-  deploy role whose trust policy is scoped to this repo and `main` /
-  `environment:production`. Applied once, by hand; everything after goes
-  through CI.
-- `modules/budget`: monthly AWS Budget with email alerts at 50/80/100%.
-- `modules/vpc`, `modules/eks`, `modules/ecr`, `modules/iam-irsa`; CPU-only
-  system node group.
-- `.github/workflows/terraform.yml`: `plan` on PR (posted as a comment),
-  `apply` on merge, OIDC only, no stored AWS keys.
+- `bootstrap/`: $50/month AWS Budget (50/80/100% actual + 100% forecast
+  alerts), S3 state bucket with native locking (ADR 0007), GitHub OIDC
+  provider, and two roles: `plan` (read-only, trusted by PR runs) and `apply`
+  (trusted only by the `aws-demo` environment). Applied once, by hand.
+- `envs/demo/`: VPC (2 AZs, single NAT), EKS with 2 × t3.medium CPU nodes and
+  access entries, ECR repo with immutable tags. Community modules, pinned
+  (ADR 0009).
+- `.github/workflows/terraform.yml`: offline checks + `plan` on every PR
+  (posted as a comment); `apply`/`destroy` by manual run only (ADR 0008).
+- `scripts/up.sh`, `down.sh`, `whats-running.sh`.
 
-**Gate:** a PR shows a real `terraform plan` comment; merge applies it;
-`kubectl get nodes` from CI shows the system nodes; the repo has zero AWS
-secrets in Settings → Secrets.
+Runbook: `infra/terraform/README.md`.
+
+**Gate:** a PR shows a real `terraform plan` comment; a manual apply creates
+the cluster and `kubectl get nodes` from CI shows the system nodes; the repo
+holds no AWS access keys (role ARNs only, as masked secrets); destroy leaves
+nothing billable (`make running`).
 
 ## Phase 2 — Self-hosted model on a GPU node
 

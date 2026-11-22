@@ -1,0 +1,190 @@
+name: terraform
+
+# - Every PR touching infra/terraform: offline checks, then a real plan of
+#   envs/demo using the read-only plan role, posted as a PR comment.
+# - Apply and destroy are manual (Actions -> terraform -> Run workflow), never
+#   on merge: the demo cluster costs ~$0.23/hour while it exists, so it is
+#   created for a session and destroyed after (docs/decisions/0008).
+# - No AWS keys anywhere: GitHub OIDC -> IAM roles from infra/terraform/bootstrap.
+
+on:
+  pull_request:
+    paths: ["infra/terraform/**", ".github/workflows/terraform.yml"]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "What to run against envs/demo"
+        type: choice
+        options: [plan, apply, destroy]
+        default: plan
+
+permissions:
+  contents: read
+
+concurrency:
+  # Never two runs against the same state at once; never cancel one mid-apply.
+  group: terraform-envs-demo
+  cancel-in-progress: false
+
+env:
+  TF_VERSION: "1.17.2"
+  AWS_REGION: us-east-1
+  PROJECT: self-hosted-llm-platform
+  TF_IN_AUTOMATION: "true"
+
+jobs:
+  checks:
+    name: fmt, validate, test (no AWS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: fmt
+        run: terraform fmt -recursive -check infra/terraform
+      - name: validate
+        run: |
+          for dir in infra/terraform/bootstrap infra/terraform/envs/demo; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+      - name: test cluster-admins module
+        run: |
+          terraform -chdir=infra/terraform/modules/cluster-admins init -input=false
+          terraform -chdir=infra/terraform/modules/cluster-admins test
+
+  plan:
+    name: plan (PR)
+    needs: checks
+    # Fork PRs get no OIDC token or secrets; skip rather than fail.
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_PLAN_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Derive state bucket from the account ID
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
+          echo "TF_STATE_BUCKET=$PROJECT-tfstate-$account" >> "$GITHUB_ENV"
+      - name: init
+        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+      - name: plan
+        id: plan
+        run: |
+          set -o pipefail
+          terraform plan -input=false -no-color -out=tfplan 2>&1 | tee plan.txt
+      - name: Comment plan on PR
+        if: always() && steps.plan.outcome != 'skipped'
+        uses: actions/github-script@v7
+        env:
+          PLAN_OUTCOME: ${{ steps.plan.outcome }}
+        with:
+          script: |
+            const fs = require('fs');
+            const path = 'infra/terraform/envs/demo/plan.txt';
+            let plan = fs.existsSync(path) ? fs.readFileSync(path, 'utf8') : '(no plan output)';
+            // Keep the summary line and the end, where errors and totals are.
+            const max = 60000;
+            if (plan.length > max) plan = '...(truncated)...\n' + plan.slice(-max);
+            const summary = (plan.match(/^Plan: .*$/m) || plan.match(/^No changes\..*$/m) || ['see output'])[0];
+            const marker = '<!-- terraform-plan-envs-demo -->';
+            const body = `${marker}
+            ### Terraform plan: \`envs/demo\` (${process.env.PLAN_OUTCOME})
+            **${summary}**
+
+            <details><summary>Full plan</summary>
+
+            \`\`\`
+            ${plan}
+            \`\`\`
+            </details>
+
+            Plan only. To create or destroy the environment, run the **terraform** workflow manually.`;
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+            const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+            const existing = comments.find(c => c.body.includes(marker));
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
+
+  run:
+    name: ${{ inputs.action }} (manual)
+    needs: checks
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    # The apply role trusts only jobs in this environment. Add a required
+    # reviewer to it in Settings -> Environments to make every apply/destroy
+    # wait for a click.
+    environment: aws-demo
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        working-directory: infra/terraform/envs/demo
+    steps:
+      - uses: actions/checkout@v4
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_APPLY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          mask-aws-account-id: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+      - name: Derive state bucket from the account ID
+        run: |
+          account=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account"
+          echo "TF_STATE_BUCKET=$PROJECT-tfstate-$account" >> "$GITHUB_ENV"
+      - name: init
+        run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+      - name: ${{ inputs.action }}
+        run: |
+          set -o pipefail
+          case "${{ inputs.action }}" in
+            plan)    terraform plan -input=false -no-color ;;
+            apply)   terraform apply -input=false -no-color -auto-approve ;;
+            destroy) terraform destroy -input=false -no-color -auto-approve ;;
+          esac 2>&1 | tee run.txt
+      - name: Verify cluster from CI
+        if: inputs.action == 'apply'
+        run: |
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$(terraform output -raw cluster_name)"
+          kubectl get nodes -o wide | tee nodes.txt
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "### terraform ${{ inputs.action }}: envs/demo"
+            grep -E '^(Apply complete|Destroy complete|Plan:|No changes)' run.txt || true
+            if [ -f nodes.txt ]; then echo; echo '```'; cat nodes.txt; echo '```'; fi
+            if [ "${{ inputs.action }}" = "apply" ]; then
+              echo
+              echo "**The cluster is now costing ~\$0.23/hour. Run this workflow with \`destroy\` when finished.**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -73,14 +73,14 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 
 | Path | What it does |
 |---|---|
-| `infra/terraform/bootstrap/` | Remote state bucket + lock table, GitHub OIDC provider, deploy role. Applied once, by hand. |
-| `infra/terraform/modules/vpc` | VPC with private subnets for nodes, public subnets for the load balancer |
-| `infra/terraform/modules/eks` | EKS control plane, system (CPU) node group, cluster add-ons |
-| `infra/terraform/modules/gpu-nodegroup` | GPU node group on spot instances, min size 0, tainted so only inference pods land there |
-| `infra/terraform/modules/ecr` | Image repository with immutable tags |
-| `infra/terraform/modules/iam-irsa` | Pod-level IAM roles (gateway reads secrets; nothing else gets AWS access) |
-| `infra/terraform/modules/budget` | AWS Budget alarm — the cost guardrail is infrastructure, not a promise |
-| `infra/terraform/envs/demo` | The one environment, composed from the modules |
+| `infra/terraform/bootstrap/` | $50/month budget alarm, S3 state bucket (native locking), GitHub OIDC provider, `plan` and `apply` roles. Applied once, by hand. |
+| `infra/terraform/envs/demo/` | VPC, EKS with 2 CPU nodes and access entries, ECR repo. Created per session, destroyed after (~$0.23/hour). |
+| `infra/terraform/modules/budget` | AWS Budget with actual and forecast alerts; the cost guardrail is infrastructure, not a promise |
+| `infra/terraform/modules/github-oidc` | OIDC provider + two roles, each trusted by exactly one kind of workflow run |
+| `infra/terraform/modules/ecr` | Image repository with immutable tags and a lifecycle policy |
+| `infra/terraform/modules/cluster-admins` | Who gets EKS cluster-admin besides the applier; pure logic with `terraform test` cases |
+| `infra/terraform/modules/gpu-nodegroup` | Phase 2: GPU node group on spot instances, min size 0 |
+| `infra/terraform/modules/iam-irsa` | Phase 4: pod-level IAM (gateway reads secrets; nothing else gets AWS access) |
 | `k8s/vllm/` | vLLM Deployment/Service, model + adapter config, GPU tolerations |
 | `k8s/keda/` | ScaledObject: scale vLLM on waiting-request queue depth, not CPU; to zero when idle |
 | `k8s/gateway/` | Gateway Deployment and Service (Ingress and HPA come in Phase 4) |
@@ -96,8 +96,8 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `prompts/` | Versioned prompt templates; a change here triggers the eval gate |
 | `loadtest/` | Load scripts that produce the latency/cost numbers in this README |
 | `local/` | `kind-up.sh`, `kind-down.sh`, `smoke-test.sh`: the Phase 0 request path on a laptop, no GPU, no AWS bill |
-| `scripts/` | `up.sh` / `down.sh` / `cost-report.sh` |
-| `.github/workflows/` | `test.yml` (gateway tests + image build) now; `terraform.yml`, `eval-gate.yml`, `deploy.yml` in later phases |
+| `scripts/` | `up.sh` / `down.sh` (create/destroy `envs/demo` from your Mac), `whats-running.sh` (anything still billing?) |
+| `.github/workflows/` | `test.yml` (gateway tests + image build); `terraform.yml` (plan on PR, manual apply/destroy); `eval-gate.yml`, `deploy.yml` in later phases |
 | `docs/` | Build plan, architecture, ADRs, incidents, evidence (screenshots, raw outputs) |
 
 ## Verified results
@@ -182,11 +182,11 @@ make local-up      # kind cluster + gateway + small CPU model
 make smoke         # the Phase 0 gate: self-hosted answer, then fallback
 make local-down
 
-# AWS (costs money — see the table above)
-cd infra/terraform/bootstrap && terraform apply   # once
-./scripts/up.sh
-make loadtest && make eval
-./scripts/down.sh                                  # always
+# AWS (costs ~$0.23/hour while up). First time: infra/terraform/README.md
+export AWS_PROFILE=llm-platform
+make up            # VPC + EKS + ECR in us-east-1
+make down          # always; then lists anything still billing
+make running       # double-check
 ```
 
 ## What I'd add next

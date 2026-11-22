@@ -35,7 +35,7 @@ CLIENT_SECRET=$(openssl rand -hex 16)
 ENV
   chmod 600 "$ENV_FILE"
 fi
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091
 source "$ENV_FILE"
 
 kubectl apply -k "$ROOT/k8s/base"

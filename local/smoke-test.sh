@@ -5,7 +5,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-# shellcheck disable=SC1090
+# shellcheck disable=SC1090,SC1091
 source "$ROOT/local/.env.local"
 URL="${GATEWAY_URL:-http://localhost:8000}"
 command -v jq >/dev/null || { echo "missing: jq"; exit 1; }
