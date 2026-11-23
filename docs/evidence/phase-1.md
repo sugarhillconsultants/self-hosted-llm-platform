@@ -18,20 +18,48 @@ Paste real output only. Trim account IDs to the last four digits.
 
 ## 1. Bootstrap apply (from the Mac)
 
+2026-11-22, from the Mac with the `llm-platform` SSO profile (AdministratorAccess).
+
 ```
-<terraform apply summary: resources created>
-<terraform output: state_bucket, budget_name (role ARNs trimmed)>
+Apply complete! Resources: 14 added, 0 changed, 0 destroyed.
+
+Outputs:
+
+budget_name = "self-hosted-llm-platform-monthly"
+github_secrets = {
+  "AWS_APPLY_ROLE_ARN" = "arn:aws:iam::00xx…:role/self-hosted-llm-platform-github-apply"
+  "AWS_PLAN_ROLE_ARN" = "arn:aws:iam::00xx…:role/self-hosted-llm-platform-github-plan"
+}
+state_bucket = "self-hosted-llm-platform-tfstate-00xx…"
 ```
+
+14 = budget (1) + state bucket and its 7 settings (8) + OIDC provider, two
+roles and three permission attachments (5).
 
 ## 2. Bootstrap state moved into S3
 
+2026-11-23. First attempt failed: the runbook derived the bucket name with
+`terraform output`, which refuses to run once a new backend block is present,
+so the bucket name came out empty (`The value cannot be empty`). Runbook
+fixed to derive it from the account ID instead.
+
 ```
-<terraform init -migrate-state output; aws s3 ls of the bucket>
+$ terraform state list | wc -l
+      20
+$ terraform state list | grep -v 'data\.' | wc -l
+      14
+$ aws s3 ls "s3://$BUCKET/bootstrap/"
+2026-11-23 04:43:50      37103 terraform.tfstate
+$ terraform plan
+No changes. Your infrastructure matches the configuration.
 ```
+
+(20 includes 6 data sources: lookups, not created resources.)
 
 ## 3. PR plan comment
 
-- PR link:
+- PR: #1 (`phase-1-gate`)
+- First run: failed before Terraform ran, OIDC subject mismatch (incident #4)
 - Plan summary line:
 
 ## 4. Manual apply from CI
@@ -59,8 +87,14 @@ Paste real output only. Trim account IDs to the last four digits.
 ## Secrets in the repo
 
 ```
-<gh secret list>
+$ gh secret list
+NAME                UPDATED
+AWS_APPLY_ROLE_ARN  about 1 minute ago
+AWS_PLAN_ROLE_ARN   about 1 minute ago
 ```
+
+No AWS access keys: two role ARNs only. Environment `aws-demo` exists with
+`required_reviewers`.
 
 ## Cost of this phase
 

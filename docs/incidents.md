@@ -107,6 +107,40 @@ answered in 2.0 s. On the Mac, the fixed gateway answered from the fallback in
 first run had waited ~30 s and then failed. Evidence:
 [`docs/evidence/phase-0.md`](evidence/phase-0.md).
 
+## 4. GitHub sent an immutable OIDC subject; the AWS trust policy expected the name-based one
+
+The first real `terraform plan` from a pull request never reached Terraform.
+`aws-actions/configure-aws-credentials` retried for 30 seconds, then failed:
+`Could not assume role with OIDC: Not authorized to perform
+sts:AssumeRoleWithWebIdentity`. This failure was predicted in
+`docs/BUILD_PLAN.md` ("OIDC trust-policy `sub` claim mismatch, the same class
+of bug as the Azure `AADSTS700213` incident"). The prediction was right about
+the category and wrong about the cause: no typo this time.
+
+Rather than guess, I compared the two sides. The role's trust policy
+(`aws iam get-role`) expected exactly
+`repo:sugarhillconsultants/self-hosted-llm-platform:pull_request`. CloudTrail
+records rejected web-identity calls, and `aws cloudtrail lookup-events
+--lookup-attributes AttributeKey=EventName,AttributeValue=AssumeRoleWithWebIdentity`
+showed five `AccessDenied` attempts presenting
+`repo:sugarhillconsultants@12613063/self-hosted-llm-platform@142…:pull_request`.
+The repository's OIDC settings (`gh api repos/…/actions/oidc/customization/sub`)
+explained the difference: `"use_immutable_subject": true`. GitHub now embeds
+the owner's and repository's numeric IDs in the subject, and the
+long-documented `repo:owner/repo` pattern, which my module was written to,
+no longer matches.
+
+The fix keeps the immutable format rather than switching it off, because it
+is the stronger one. A name-based subject would let anyone who later creates
+a repository with the same name, after a rename or deletion, assume these
+roles; numeric IDs are never reused. The `github-oidc` module now takes the
+exact `subject_prefix` from GitHub's API instead of building one from the
+repository name, validates its shape, and exposes the subjects each role
+trusts as an output. Three mocked `terraform test` cases now run in CI. **The
+lesson that transferred from multi-cloud-mlops-showcase** was the diagnosis,
+not the fix: compare what the identity provider actually sent with what the
+trust policy expects, from logs on both sides, before changing anything.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

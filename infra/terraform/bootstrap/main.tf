@@ -106,7 +106,7 @@ resource "aws_s3_bucket_policy" "state" {
 module "github_oidc" {
   source               = "../modules/github-oidc"
   name_prefix          = var.project
-  github_repository    = var.github_repository
+  subject_prefix       = var.github_oidc_subject_prefix
   state_bucket_arn     = aws_s3_bucket.state.arn
   create_oidc_provider = var.create_oidc_provider
 }
