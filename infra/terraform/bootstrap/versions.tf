@@ -12,12 +12,12 @@ terraform {
   # first apply, uncomment this block and move the state into the bucket it
   # created (infra/terraform/README.md, step 4).
   #
-  # backend "s3" {
-  #   key          = "bootstrap/terraform.tfstate"
-  #   region       = "us-east-1"
-  #   encrypt      = true
-  #   use_lockfile = true
-  # }
+  backend "s3" {
+     key          = "bootstrap/terraform.tfstate"
+     region       = "us-east-1"
+     encrypt      = true
+     use_lockfile = true
+   }
 }
 
 provider "aws" {
