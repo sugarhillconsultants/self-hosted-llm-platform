@@ -170,8 +170,8 @@ creation. The fix uses the ARNs exactly as IAM returns them
 (`data.aws_iam_roles.sso_admin.arns`) and never rebuilds an ARN from a name.
 The module now validates that its inputs are full role ARNs, and the test
 that encoded the wrong rule now asserts the right one. The half-built
-environment was destroyed straight after the failure, so it only cost the
-minutes it ran.
+environment was destroyed 23 minutes after the failure (about 41 minutes
+of running time, roughly $0.16).
 
 ## 6. The cost check reported "nothing billable" when it hadn't checked anything
 

@@ -3,7 +3,7 @@
 Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-zero), with an LLM gateway for routing, fallback and cost control, and a CI eval gate that blocks regressions.
 
 <!-- Badges: fill in once each claim is true, not before. -->
-![Status](https://img.shields.io/badge/Status-In_Progress-yellow?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Phases_0_and_1_verified-yellow?style=flat-square)
 ![Incidents](https://img.shields.io/badge/Incidents-6_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
@@ -116,10 +116,21 @@ POST /v1/chat (model scaled to zero)    → 200, x-served-by: anthropic,
 gateway_fallbacks_total{reason="connect_timeout"} → 1
 ```
 
-AWS (Phases 1–7), not yet run:
+Phase 1, AWS foundation (us-east-1, 2026-11-23). Full output:
+[`docs/evidence/phase-1.md`](docs/evidence/phase-1.md).
 
 ```
-terraform apply (envs/demo)            → <resources created, duration>
+PR plan (read-only OIDC role)          → Plan: 56 to add, posted as a PR comment
+terraform apply (manual, aws-demo env) → Apply complete! Resources: 56 added (17 min run)
+kubectl get nodes (from CI and Mac)    → 2 × Ready, v1.37.1, private subnets, one per AZ
+terraform destroy + make running       → Verified: nothing billable by the hour
+AWS access keys stored in GitHub       → none (two role ARNs, as secrets)
+Cost of the phase                      → ~$0.30 estimated (77 cluster-minutes)
+```
+
+AWS (Phases 2–7), not yet run:
+
+```
 kubectl get nodes (GPU group at 0)     → <output>
 first request after idle (cold start)  → <seconds to first token, node spin-up time>
 POST /v1/chat (self-hosted)            → <response, latency, tokens>
