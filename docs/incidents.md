@@ -141,6 +141,64 @@ lesson that transferred from multi-cloud-mlops-showcase** was the diagnosis,
 not the fix: compare what the identity provider actually sent with what the
 trust policy expects, from logs on both sides, before changing anything.
 
+## 5. The SSO role's access entry was rejected as an "invalid principal" because I had stripped its IAM path
+
+The first manual `apply` from CI created most of the 56 planned resources
+(VPC, NAT gateway, EKS control plane, node group) and then failed on one:
+`CreateAccessEntry ... InvalidParameterException: The specified principalArn
+is invalid: invalid principal`, for
+`arn:aws:iam::…:role/AWSReservedSSO_AdministratorAccess_…`. That ARN was built
+by my `cluster-admins` module, which deliberately removed the role's
+`/aws-reserved/sso.amazonaws.com/` path, on the stated belief that "EKS access
+entries take a role ARN without its IAM path."
+
+That belief came from the older way of granting cluster access. AWS's own
+troubleshooting guidance for the `aws-auth` ConfigMap says to remove
+`/aws-reserved/sso.amazonaws.com/` from SSO role ARNs, because ConfigMap
+entries can't include a path. Access entries, the newer API this cluster uses
+(`authentication_mode = "API"`), work the other way. The [EKS user guide](https://docs.aws.amazon.com/eks/latest/userguide/creating-access-entries.html)
+says an access entry names an *existing* IAM principal, and that a role ARN
+there can include a path. Without the path, the ARN names a role that doesn't
+exist, so EKS rejects it.
+
+**Why the tests didn't catch it:** the `cluster-admins` module had five
+passing `terraform test` cases, and one of them asserted that the path was
+removed. The tests faithfully checked the wrong rule. Mocked tests verify
+logic against my understanding of an API, not against the API, and the PR
+plan couldn't catch it either, since EKS only validates the principal at
+creation. The fix uses the ARNs exactly as IAM returns them
+(`data.aws_iam_roles.sso_admin.arns`) and never rebuilds an ARN from a name.
+The module now validates that its inputs are full role ARNs, and the test
+that encoded the wrong rule now asserts the right one. The half-built
+environment was destroyed straight after the failure, so it only cost the
+minutes it ran.
+
+## 6. The cost check reported "nothing billable" when it hadn't checked anything
+
+After destroying the half-built environment from incident #5, `make running`
+printed `ok EKS clusters: none` and five more `none`s, then `Nothing billable
+by the hour in us-east-1.` Every one of those lines was false comfort. Directly
+above each `ok` line, the AWS CLI had printed `Error when retrieving token from
+sso: Token has expired and refresh failed`. The SSO session had expired, every
+API call failed, and `whats-running.sh` treated a failed call's empty output
+exactly like an empty result.
+
+The script was written as the safety net for ADR 0008 ("forgetting to destroy
+is still possible; mitigations: … `make running`"), so this was the worst
+possible failure: a false all-clear from the tool whose only job is to say
+whether money is being spent. It was caught only because the user pasted the
+full output, not just the last line. The bug class is old and general:
+**a check that cannot distinguish "found nothing" from "couldn't look" will
+eventually report the second as the first.**
+
+The script now verifies credentials before anything else and exits 2 with
+the login command if they don't work. It checks each call's exit status, so a
+failed check prints `?? CHECK FAILED` with the error, never `ok … none`. It
+exits 0 only when every check actually ran, and says `Verified:`. Exit codes
+are 0 (verified clean), 1 (billable resources found) and 2 (could not
+verify). All four paths (expired token, clean, resources running, one check
+denied) were exercised against a stubbed `aws` command.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

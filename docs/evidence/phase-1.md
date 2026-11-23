@@ -60,11 +60,15 @@ No changes. Your infrastructure matches the configuration.
 
 - PR: #1 (`phase-1-gate`)
 - First run: failed before Terraform ran, OIDC subject mismatch (incident #4)
-- Plan summary line:
+- After the fix: plan job passed with the read-only role
+- Plan summary line: **Plan: 56 to add, 0 to change, 0 to destroy.**
 
 ## 4. Manual apply from CI
 
-- Workflow run link:
+- Attempt 1 (2026-11-23): failed creating the SSO admin access entry,
+  `InvalidParameterException: The specified principalArn is invalid: invalid
+  principal` (incident #5). Partial environment destroyed straight after.
+- Attempt 2 workflow run link:
 - Duration:
 
 ```

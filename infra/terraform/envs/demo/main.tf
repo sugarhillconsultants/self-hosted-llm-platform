@@ -58,10 +58,11 @@ data "aws_iam_session_context" "current" {
 }
 
 module "cluster_admins" {
-  source               = "../../modules/cluster-admins"
-  account_id           = data.aws_caller_identity.current.account_id
-  candidate_role_names = data.aws_iam_roles.sso_admin.names
-  applying_role_arn    = data.aws_iam_session_context.current.issuer_arn
+  source = "../../modules/cluster-admins"
+  # The ARNs IAM itself returns, path included. Never rebuild an ARN from a
+  # name: incident #5 was a rebuilt ARN naming a role that doesn't exist.
+  candidate_role_arns = tolist(data.aws_iam_roles.sso_admin.arns)
+  applying_role_arn   = data.aws_iam_session_context.current.issuer_arn
 }
 
 module "eks" {
