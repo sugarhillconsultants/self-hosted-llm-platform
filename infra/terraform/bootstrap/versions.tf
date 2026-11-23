@@ -13,11 +13,11 @@ terraform {
   # created (infra/terraform/README.md, step 4).
   #
   backend "s3" {
-     key          = "bootstrap/terraform.tfstate"
-     region       = "us-east-1"
-     encrypt      = true
-     use_lockfile = true
-   }
+    key          = "bootstrap/terraform.tfstate"
+    region       = "us-east-1"
+    encrypt      = true
+    use_lockfile = true
+  }
 }
 
 provider "aws" {
