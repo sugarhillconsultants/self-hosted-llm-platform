@@ -141,6 +141,38 @@ lesson that transferred from multi-cloud-mlops-showcase** was the diagnosis,
 not the fix: compare what the identity provider actually sent with what the
 trust policy expects, from logs on both sides, before changing anything.
 
+## 5. The SSO role's access entry was rejected as an "invalid principal" because I had stripped its IAM path
+
+The first manual `apply` from CI created most of the 56 planned resources
+(VPC, NAT gateway, EKS control plane, node group) and then failed on one:
+`CreateAccessEntry ... InvalidParameterException: The specified principalArn
+is invalid: invalid principal`, for
+`arn:aws:iam::…:role/AWSReservedSSO_AdministratorAccess_…`. That ARN was built
+by my `cluster-admins` module, which deliberately removed the role's
+`/aws-reserved/sso.amazonaws.com/` path, on the stated belief that "EKS access
+entries take a role ARN without its IAM path."
+
+That belief came from the older way of granting cluster access. AWS's own
+troubleshooting guidance for the `aws-auth` ConfigMap says to remove
+`/aws-reserved/sso.amazonaws.com/` from SSO role ARNs, because ConfigMap
+entries can't include a path. Access entries, the newer API this cluster uses
+(`authentication_mode = "API"`), work the other way. The [EKS user guide](https://docs.aws.amazon.com/eks/latest/userguide/creating-access-entries.html)
+says an access entry names an *existing* IAM principal, and that a role ARN
+there can include a path. Without the path, the ARN names a role that doesn't
+exist, so EKS rejects it.
+
+**Why the tests didn't catch it:** the `cluster-admins` module had five
+passing `terraform test` cases, and one of them asserted that the path was
+removed. The tests faithfully checked the wrong rule. Mocked tests verify
+logic against my understanding of an API, not against the API, and the PR
+plan couldn't catch it either, since EKS only validates the principal at
+creation. The fix uses the ARNs exactly as IAM returns them
+(`data.aws_iam_roles.sso_admin.arns`) and never rebuilds an ARN from a name.
+The module now validates that its inputs are full role ARNs, and the test
+that encoded the wrong rule now asserts the right one. The half-built
+environment was destroyed straight after the failure, so it only cost the
+minutes it ran.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

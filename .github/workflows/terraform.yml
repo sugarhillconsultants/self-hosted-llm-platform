@@ -135,8 +135,9 @@ jobs:
             }
 
   run:
-    # inputs.action is empty on PR runs, where this job is always skipped.
-    name: ${{ inputs.action && format('{0} (manual)', inputs.action) || 'apply/destroy (manual only)' }}
+    # A fixed name: GitHub shows a skipped job's name unevaluated, so an
+    # expression here appeared as raw text on every PR.
+    name: apply-or-destroy (manual only)
     needs: checks
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
