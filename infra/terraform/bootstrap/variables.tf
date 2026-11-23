@@ -8,9 +8,12 @@ variable "project" {
   default = "self-hosted-llm-platform"
 }
 
-variable "github_repository" {
-  type    = string
-  default = "sugarhillconsultants/self-hosted-llm-platform"
+variable "github_oidc_subject_prefix" {
+  description = <<-EOT
+    This repo's GitHub OIDC subject prefix. Set in local.auto.tfvars:
+      gh api repos/sugarhillconsultants/self-hosted-llm-platform/actions/oidc/customization/sub --jq .sub_claim_prefix
+  EOT
+  type        = string
 }
 
 variable "budget_limit_usd" {

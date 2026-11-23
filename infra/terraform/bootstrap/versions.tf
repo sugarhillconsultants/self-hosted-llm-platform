@@ -8,10 +8,9 @@ terraform {
     }
   }
 
-  # Starts with local state, because the bucket doesn't exist yet. After the
-  # first apply, uncomment this block and move the state into the bucket it
-  # created (infra/terraform/README.md, step 4).
-  #
+  # State lives in the bucket this layer created. On a brand-new account,
+  # comment this block out for the first apply, then migrate
+  # (infra/terraform/README.md, step 4).
   backend "s3" {
     key          = "bootstrap/terraform.tfstate"
     region       = "us-east-1"

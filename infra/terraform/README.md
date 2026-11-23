@@ -27,6 +27,8 @@ aws sts get-caller-identity
 ```bash
 cd infra/terraform/bootstrap
 echo 'budget_alert_email = "you@example.com"' > local.auto.tfvars   # gitignored
+# The exact identity GitHub puts in this repo's OIDC tokens (incident #4):
+echo "github_oidc_subject_prefix = \"$(gh api repos/sugarhillconsultants/self-hosted-llm-platform/actions/oidc/customization/sub --jq .sub_claim_prefix)\"" >> local.auto.tfvars
 terraform init
 terraform apply
 ```
@@ -66,15 +68,19 @@ done
 ## 4. Move the bootstrap state into the bucket
 
 Local state on one laptop is a single point of failure for the roles CI
-depends on. In `bootstrap/versions.tf`, uncomment the `backend "s3"` block,
-then:
+depends on. `bootstrap/versions.tf` ships with the `backend "s3"` block
+enabled; for the very first apply on a new account, comment it out, apply,
+then uncomment it and run:
 
 ```bash
 cd bootstrap
-terraform init -migrate-state \
-  -backend-config="bucket=$(terraform output -raw state_bucket)"
-# answer "yes"; then confirm and delete the local copy:
-terraform state list && rm terraform.tfstate terraform.tfstate.backup
+# Not $(terraform output ...): once the backend block is back, terraform
+# refuses every command, output included, until init has run.
+BUCKET=self-hosted-llm-platform-tfstate-$(aws sts get-caller-identity --query Account --output text)
+terraform init -migrate-state -backend-config="bucket=$BUCKET"     # answer "yes"
+terraform state list | grep -v 'data\.' | wc -l   # 14 resources (20 lines with data sources)
+terraform plan                                     # expect "No changes."
+rm terraform.tfstate terraform.tfstate.backup
 ```
 
 ## 5. The Phase 1 gate

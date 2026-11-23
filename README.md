@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-In_Progress-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-3_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-4_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -158,7 +158,7 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-Three incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+Four incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
 
 - Request models defined inside the FastAPI app factory were silently read
   as missing query parameters, because of postponed annotations. Caught by
@@ -171,6 +171,11 @@ Three incidents so far, documented in full in [`docs/incidents.md`](docs/inciden
   failing over, because one timeout covered both "can't connect" and "still
   generating." Split into a 2-second connect timeout and a separate generation
   timeout.
+- The first PR plan couldn't sign in to AWS: GitHub now issues immutable
+  OIDC subjects (`repo:owner@id/repo@id:…`), and the trust policy expected
+  the older name-based form. Found by comparing CloudTrail's rejected
+  attempts with the role's trust policy; fixed by trusting the immutable
+  form, which also blocks repo-name squatting.
 
 ## Running it
 

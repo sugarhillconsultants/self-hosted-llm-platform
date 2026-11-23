@@ -5,9 +5,18 @@
 #   apply : runs in the GitHub environment `aws-demo`. Can create and destroy
 #           the demo environment. See docs/decisions/0008.
 
-variable "github_repository" {
-  description = "owner/repo"
+variable "subject_prefix" {
+  description = <<-EOT
+    The repository's OIDC subject prefix, exactly as GitHub issues it:
+      gh api repos/OWNER/REPO/actions/oidc/customization/sub --jq .sub_claim_prefix
+    With immutable subjects (GitHub's current default) it looks like
+    repo:owner@<owner-id>/repo@<repo-id>, not repo:owner/repo (incident #4).
+  EOT
   type        = string
+  validation {
+    condition     = can(regex("^repo:[^:]+$", var.subject_prefix))
+    error_message = "subject_prefix must look like repo:owner@123/repo@456 (no trailing :context)."
+  }
 }
 
 variable "apply_environment" {
@@ -52,11 +61,15 @@ locals {
   oidc_provider_arn = var.create_oidc_provider ? aws_iam_openid_connect_provider.github[0].arn : "arn:aws:iam::${data.aws_caller_identity.current.account_id}:oidc-provider/${local.oidc_host}"
 }
 
-data "aws_iam_policy_document" "trust" {
-  for_each = {
-    plan  = "repo:${var.github_repository}:pull_request"
-    apply = "repo:${var.github_repository}:environment:${var.apply_environment}"
+locals {
+  trusted_subjects = {
+    plan  = "${var.subject_prefix}:pull_request"
+    apply = "${var.subject_prefix}:environment:${var.apply_environment}"
   }
+}
+
+data "aws_iam_policy_document" "trust" {
+  for_each = local.trusted_subjects
 
   statement {
     actions = ["sts:AssumeRoleWithWebIdentity"]
@@ -69,9 +82,9 @@ data "aws_iam_policy_document" "trust" {
       variable = "${local.oidc_host}:aud"
       values   = ["sts.amazonaws.com"]
     }
-    # StringEquals, not StringLike: an exact subject, no wildcards. A typo
-    # here is the AWS twin of the Azure AADSTS700213 incident in
-    # multi-cloud-mlops-showcase.
+    # StringEquals, not StringLike: one exact subject, no wildcards. The
+    # immutable form pins the repo's numeric IDs, so a deleted-and-recreated
+    # (or renamed-and-squatted) repo with the same name cannot assume this.
     condition {
       test     = "StringEquals"
       variable = "${local.oidc_host}:sub"
@@ -120,6 +133,10 @@ resource "aws_iam_role_policy" "plan_state" {
 resource "aws_iam_role_policy_attachment" "apply_admin" {
   role       = aws_iam_role.this["apply"].name
   policy_arn = "arn:aws:iam::aws:policy/AdministratorAccess"
+}
+
+output "trusted_subjects" {
+  value = local.trusted_subjects
 }
 
 output "plan_role_arn" {

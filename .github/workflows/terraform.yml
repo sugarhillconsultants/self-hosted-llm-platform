@@ -52,10 +52,14 @@ jobs:
             terraform -chdir="$dir" validate
             echo "::endgroup::"
           done
-      - name: test cluster-admins module
+      - name: module tests (mocked, no AWS)
         run: |
-          terraform -chdir=infra/terraform/modules/cluster-admins init -input=false
-          terraform -chdir=infra/terraform/modules/cluster-admins test
+          for m in cluster-admins github-oidc; do
+            echo "::group::$m"
+            terraform -chdir=infra/terraform/modules/$m init -input=false
+            terraform -chdir=infra/terraform/modules/$m test
+            echo "::endgroup::"
+          done
 
   plan:
     name: plan (PR)
@@ -131,7 +135,8 @@ jobs:
             }
 
   run:
-    name: ${{ inputs.action }} (manual)
+    # inputs.action is empty on PR runs, where this job is always skipped.
+    name: ${{ inputs.action && format('{0} (manual)', inputs.action) || 'apply/destroy (manual only)' }}
     needs: checks
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
