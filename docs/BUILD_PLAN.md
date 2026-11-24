@@ -181,6 +181,8 @@ to see which predictions were right and which failures were genuinely new.
   dominant number, not inference.
 - The vLLM pod's memory limit killing it while weights load (16 GiB node).
 - Teardown racing Karpenter: `terraform destroy` before its nodes are gone.
+- Network deletion blocked by resources Terraform never created (leaked
+  VPC CNI interfaces): happened, incident #9.
 - KEDA scaling to zero and the first request timing out at the load balancer
   before a node is even provisioned.
 - OIDC trust-policy `sub` claim mismatch (the same class of bug as the Azure

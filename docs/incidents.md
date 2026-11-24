@@ -224,6 +224,70 @@ transferred:** the pattern from incident #5. A cloud API's validation is the
 only test of some rules, so a first apply in a disposable environment is part
 of the test plan, and the teardown has to be ready before it.
 
+## 8. Kubernetes named an environment variable after the Service, and vLLM read it as its own setting
+
+The first Phase 2 smoke test got further than any earlier attempt: Karpenter
+launched a `g6.xlarge` from zero in 4 minutes, the 10 GB vLLM image pulled in
+2 m 48 s, and then the pod never became ready. `vllm-smoke.sh` waited its full
+30 minutes. The pod log's last 20 lines showed only `RuntimeError: Engine core
+initialization failed. See root cause above`, with the cause cut off above the
+tail.
+
+The full log (`kubectl logs --previous`) showed that every part I had been
+worried about worked. The weights loaded in 36.6 s (14.29 GiB), 4.31 GiB was
+left for KV cache, and CUDA graphs captured, which also settled the open
+question from ADR 0003: the AMI's driver runs vLLM's CUDA 13 build. Then, at
+the very end of startup:
+`ValueError: VLLM_PORT 'tcp://172.20.253.250:8000' appears to be a URI. This may
+be caused by a Kubernetes service discovery issue`. Kubernetes injects
+Docker-link-style variables for every Service in a pod's namespace,
+`<NAME>_PORT=tcp://<cluster-ip>:<port>` among them. I had named the Service
+`vllm`, so every pod got `VLLM_PORT`, which is also the name of one of vLLM's
+own configuration variables. The pod crashed 8 times, about 2 minutes each.
+
+Fixed with `enableServiceLinks: false` on the vLLM pod, which turns the
+injected variables off; services are reached by DNS name. Renaming the
+Service would also have worked, but would leave the same trap for any future
+Service whose name collides with an application's settings. Two changes
+came out of the same run. `vllm-smoke.sh` now stops at the second crash and
+prints the error lines instead of waiting out the timeout with a GPU billing.
+And the vLLM pod is annotated `karpenter.sh/do-not-disrupt`: Karpenter had been
+trying every 5 minutes to replace the On-Demand GPU node with a cheaper Spot
+one ("savings: $0.28"). Each attempt failed with `UnfulfillableCapacity`
+because no `g6.xlarge` Spot capacity was available, but had one succeeded it
+would have evicted vLLM mid-startup and thrown away the cold start.
+
+## 9. A leaked VPC CNI network interface held a subnet and a security group, and the destroy failed after 35 minutes
+
+After the incident #8 session, the destroy workflow's cleanup step succeeded
+(no Karpenter nodes left), then `terraform destroy` ran for 35 minutes and
+failed on two resources: `DeleteSecurityGroup ... DependencyViolation: resource
+sg-… has a dependent object` and `DeleteSubnet ... has dependencies and cannot
+be deleted`. `make running` confirmed nothing billable remained (cluster, NAT
+gateway and instances were all gone), so the failure cost time, not money.
+
+Listing the network interfaces in that subnet and security group found
+exactly one: `eni-08e3a2e1bc1c42a18`, status `available`, description
+`aws-K8S-i-01353f90111fa957b`. That description is the Amazon VPC CNI's: it
+creates extra interfaces on each node to give pods VPC IP addresses, names them
+after the instance, and normally deletes them itself. When a node terminates
+before the CNI can clean up, the interface detaches and stays behind, owned
+by no instance and unknown to Terraform, still occupying the subnet and still
+a member of the node security group. Terraform retried the deletions until
+its timeout. Deleting the interface by hand let a second destroy finish in
+42 seconds.
+
+**The fix makes the destroy order explicit** (`scripts/destroy-demo.sh`, used
+by both `make down` and the workflow): first destroy only the cluster and
+its nodes (`-target=module.eks -target=module.karpenter`); then wait for any
+`aws-K8S-*` interfaces in the project's VPC to detach and delete them; then
+destroy everything else. Waiting for the nodes to be gone before deleting
+the network is what removes the race, whichever node (a Karpenter GPU node
+or a system node) leaked the interface. The script stops with an error, rather
+than carrying on, if it can't look up the VPC or the interfaces (the incident
+#6 rule). Tested against stubs for a leaked interface, one still detaching, a
+VPC already gone, and a failing AWS call.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

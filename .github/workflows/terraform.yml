@@ -181,7 +181,8 @@ jobs:
           case "${{ inputs.action }}" in
             plan)    terraform plan -input=false -no-color ;;
             apply)   terraform apply -input=false -no-color -auto-approve ;;
-            destroy) terraform destroy -input=false -no-color -auto-approve ;;
+            # Staged: cluster, leaked CNI interfaces, then network (incident #9).
+            destroy) "$GITHUB_WORKSPACE/scripts/destroy-demo.sh" --auto-approve ;;
           esac 2>&1 | tee run.txt
       - name: Verify cluster from CI
         if: inputs.action == 'apply'

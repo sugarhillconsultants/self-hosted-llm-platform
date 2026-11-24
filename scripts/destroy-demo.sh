@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# Destroy envs/demo in stages, so a leaked network interface can't block it
+# (incident #9: one orphaned VPC CNI interface held a subnet and a security
+# group, and a one-shot `terraform destroy` retried for 35 minutes then failed).
+#
+#   1. destroy the cluster and its nodes (module.eks, module.karpenter)
+#   2. delete VPC CNI interfaces those nodes left behind ("aws-K8S-<instance>",
+#      status available), which Terraform doesn't know about
+#   3. destroy everything else (VPC, subnets, NAT, ECR...)
+#
+# Run scripts/k8s-platform.sh down first (down.sh and the workflow do).
+# Pass --auto-approve to skip Terraform's prompts (CI).
+# shellcheck source-path=SCRIPTDIR source=_common.sh
+source "$(dirname "$0")/_common.sh"
+
+AUTO=()
+[[ "${1:-}" == "--auto-approve" ]] && AUTO=(-auto-approve)
+VPC_NAME="$PROJECT-demo"
+
+cleanup_cni_enis() {
+  local vpc ids busy
+  if ! vpc=$(aws ec2 describe-vpcs --filters "Name=tag:Name,Values=$VPC_NAME" \
+               --query 'Vpcs[0].VpcId' --output text); then
+    echo "ERROR: could not look up VPC $VPC_NAME"; exit 1
+  fi
+  [[ "$vpc" == "None" || -z "$vpc" ]] && { echo "VPC $VPC_NAME already gone."; return 0; }
+
+  # Interfaces detach a little after their instance terminates; wait for them.
+  for _ in $(seq 1 18); do
+    busy=$(aws ec2 describe-network-interfaces \
+      --filters "Name=vpc-id,Values=$vpc" "Name=description,Values=aws-K8S-*" "Name=status,Values=in-use,attaching,detaching" \
+      --query 'NetworkInterfaces[].NetworkInterfaceId' --output text) || { echo "ERROR: could not list interfaces"; exit 1; }
+    [[ -z "$busy" || "$busy" == "None" ]] && break
+    echo "Waiting for CNI interfaces to detach: $busy"
+    sleep "${SLEEP:-10}"
+  done
+
+  ids=$(aws ec2 describe-network-interfaces \
+    --filters "Name=vpc-id,Values=$vpc" "Name=description,Values=aws-K8S-*" "Name=status,Values=available" \
+    --query 'NetworkInterfaces[].NetworkInterfaceId' --output text) || { echo "ERROR: could not list interfaces"; exit 1; }
+  if [[ -z "$ids" || "$ids" == "None" ]]; then
+    echo "No leaked CNI interfaces in $vpc."
+    return 0
+  fi
+  local eni
+  for eni in $ids; do
+    echo "Deleting leaked CNI interface $eni"
+    aws ec2 delete-network-interface --network-interface-id "$eni"
+  done
+}
+
+tf_init
+echo "== 1/3 Destroying the cluster and its nodes"
+terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}" \
+  -target=module.karpenter -target=module.eks
+echo "== 2/3 Removing leaked VPC CNI network interfaces"
+cleanup_cni_enis
+echo "== 3/3 Destroying everything else"
+terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}"
