@@ -257,6 +257,37 @@ one ("savings: $0.28"). Each attempt failed with `UnfulfillableCapacity`
 because no `g6.xlarge` Spot capacity was available, but had one succeeded it
 would have evicted vLLM mid-startup and thrown away the cold start.
 
+## 9. A leaked VPC CNI network interface held a subnet and a security group, and the destroy failed after 35 minutes
+
+After the incident #8 session, the destroy workflow's cleanup step succeeded
+(no Karpenter nodes left), then `terraform destroy` ran for 35 minutes and
+failed on two resources: `DeleteSecurityGroup ... DependencyViolation: resource
+sg-… has a dependent object` and `DeleteSubnet ... has dependencies and cannot
+be deleted`. `make running` confirmed nothing billable remained (cluster, NAT
+gateway and instances were all gone), so the failure cost time, not money.
+
+Listing the network interfaces in that subnet and security group found
+exactly one: `eni-08e3a2e1bc1c42a18`, status `available`, description
+`aws-K8S-i-01353f90111fa957b`. That description is the Amazon VPC CNI's: it
+creates extra interfaces on each node to give pods VPC IP addresses, names them
+after the instance, and normally deletes them itself. When a node terminates
+before the CNI can clean up, the interface detaches and stays behind, owned
+by no instance and unknown to Terraform, still occupying the subnet and still
+a member of the node security group. Terraform retried the deletions until
+its timeout. Deleting the interface by hand let a second destroy finish in
+42 seconds.
+
+**The fix makes the destroy order explicit** (`scripts/destroy-demo.sh`, used
+by both `make down` and the workflow): first destroy only the cluster and
+its nodes (`-target=module.eks -target=module.karpenter`); then wait for any
+`aws-K8S-*` interfaces in the project's VPC to detach and delete them; then
+destroy everything else. Waiting for the nodes to be gone before deleting
+the network is what removes the race, whichever node (a Karpenter GPU node
+or a system node) leaked the interface. The script stops with an error, rather
+than carrying on, if it can't look up the VPC or the interfaces (the incident
+#6 rule). Tested against stubs for a leaked interface, one still detaching, a
+VPC already gone, and a failing AWS call.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

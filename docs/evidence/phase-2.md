@@ -84,6 +84,14 @@ ValueError: VLLM_PORT 'tcp://172.20.253.250:8000' appears to be a URI.   <- inci
   returned `UnfulfillableCapacity` for `g6.xlarge` Spot in us-east-1.
 - GPU node scaled away after the logs were saved (`replicas=0`).
 
+Teardown after this session (2026-11-24, run 45456030010): the Karpenter
+cleanup step passed, then `terraform destroy` failed after 35 m 40 s on a
+subnet and security group held by one leaked VPC CNI interface,
+`eni-08e3a2e1bc1c42a18` (`available`, `aws-K8S-i-01353f90111fa957b`), incident #9.
+`make running` showed nothing billable throughout. After deleting the
+interface, run 45471188269 finished the destroy in 42 s and its
+"Verify nothing is left billing" step passed.
+
 ## 1. Platform install (from the apply run)
 
 ```

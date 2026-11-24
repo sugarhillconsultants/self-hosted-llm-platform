@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-Phases_0_and_1_verified-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-8_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-9_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -97,7 +97,7 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `prompts/` | Versioned prompt templates; a change here triggers the eval gate |
 | `loadtest/` | Load scripts that produce the latency/cost numbers in this README |
 | `local/` | `kind-up.sh`, `kind-down.sh`, `smoke-test.sh`: the Phase 0 request path on a laptop, no GPU, no AWS bill |
-| `scripts/` | `up.sh` / `down.sh` (whole environment), `k8s-platform.sh up/down` (Karpenter, device plugin, NodePool; removes GPU nodes before destroy), `vllm-smoke.sh` (Phase 2 gate), `pin-model.sh`, `whats-running.sh` |
+| `scripts/` | `up.sh` / `down.sh` (whole environment), `destroy-demo.sh` (staged destroy: cluster, leaked CNI interfaces, network), `k8s-platform.sh up/down` (Karpenter, device plugin, NodePool; removes GPU nodes before destroy), `vllm-smoke.sh` (Phase 2 gate), `pin-model.sh`, `whats-running.sh` |
 | `.github/workflows/` | `test.yml` (gateway tests + image build); `terraform.yml` (plan on PR, manual apply/destroy); `eval-gate.yml`, `deploy.yml` in later phases |
 | `docs/` | Build plan, architecture, ADRs, incidents, evidence (screenshots, raw outputs) |
 
@@ -170,7 +170,7 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-Eight incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+Nine incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
 
 - Request models defined inside the FastAPI app factory were silently read
   as missing query parameters, because of postponed annotations. Caught by
@@ -203,6 +203,9 @@ Eight incidents so far, documented in full in [`docs/incidents.md`](docs/inciden
   `<SERVICE>_PORT` variables, and the Service named `vllm` produced
   `VLLM_PORT`, one of vLLM's own settings. Fixed with
   `enableServiceLinks: false`; the smoke test now fails fast on a crash loop.
+- A destroy failed after 35 minutes because one orphaned VPC CNI network
+  interface still held a subnet and security group. Destroys are now staged:
+  cluster and nodes first, then leaked interfaces, then the network.
 
 ## Running it
 

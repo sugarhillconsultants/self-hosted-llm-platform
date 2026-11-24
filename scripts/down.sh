@@ -7,7 +7,7 @@ source "$(dirname "$0")/_common.sh"
 # Karpenter's GPU nodes aren't in Terraform state: remove them first, or they
 # keep billing and block the VPC from being deleted.
 "$ROOT/scripts/k8s-platform.sh" down
-tf_init
-terraform -chdir="$DEMO_DIR" destroy -input=false
+# Staged destroy: cluster, then leaked CNI interfaces, then the network.
+"$ROOT/scripts/destroy-demo.sh"
 echo
 "$ROOT/scripts/whats-running.sh"
