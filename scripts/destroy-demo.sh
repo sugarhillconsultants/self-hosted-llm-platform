@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 # Destroy envs/demo in stages, so a leaked network interface can't block it
-# (incident #9: one orphaned VPC CNI interface held a subnet and a security
-# group, and a one-shot `terraform destroy` retried for 35 minutes then failed).
+# (incident #9: an orphaned VPC CNI interface, "aws-K8S-<instance>", held a
+# subnet and a security group, and `terraform destroy` retried then failed).
 #
-#   1. destroy the cluster and its nodes (module.eks, module.karpenter)
-#   2. delete VPC CNI interfaces those nodes left behind ("aws-K8S-<instance>",
-#      status available), which Terraform doesn't know about
-#   3. destroy everything else (VPC, subnets, NAT, ECR...)
+#   1. destroy ONLY the system node group resource, so its instances
+#      terminate and their interfaces detach. Not module.eks or the node
+#      group module: both own security groups the leaked interface holds
+#      (incident #9b, the first version of this script made that mistake).
+#   2. delete any aws-K8S-* interfaces left in the project VPC
+#   3. destroy everything else; if a DependencyViolation still happens,
+#      clean up again and retry once
 #
 # Run scripts/k8s-platform.sh down first (down.sh and the workflow do).
 # Pass --auto-approve to skip Terraform's prompts (CI).
@@ -49,11 +52,16 @@ cleanup_cni_enis() {
   done
 }
 
+NODE_GROUP='module.eks.module.eks_managed_node_group["system"].aws_eks_node_group.this[0]'
+
 tf_init
-echo "== 1/3 Destroying the cluster and its nodes"
-terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}" \
-  -target=module.karpenter -target=module.eks
+echo "== 1/3 Destroying the system node group (instances only)"
+terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}" -target="$NODE_GROUP"
 echo "== 2/3 Removing leaked VPC CNI network interfaces"
 cleanup_cni_enis
 echo "== 3/3 Destroying everything else"
-terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}"
+if ! terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}"; then
+  echo "== Destroy failed; removing leaked interfaces again and retrying once"
+  cleanup_cni_enis
+  terraform -chdir="$DEMO_DIR" destroy -input=false -no-color "${AUTO[@]}"
+fi

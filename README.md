@@ -205,7 +205,9 @@ Nine incidents so far, documented in full in [`docs/incidents.md`](docs/incident
   `enableServiceLinks: false`; the smoke test now fails fast on a crash loop.
 - A destroy failed after 35 minutes because one orphaned VPC CNI network
   interface still held a subnet and security group. Destroys are now staged:
-  cluster and nodes first, then leaked interfaces, then the network.
+  node group first, then leaked interfaces, then everything else. (The first
+  version of the fix targeted the whole EKS module, which owns the security
+  groups too, and failed the same way; 9b.)
 
 ## Running it
 

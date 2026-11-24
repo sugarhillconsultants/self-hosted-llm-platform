@@ -288,6 +288,22 @@ than carrying on, if it can't look up the VPC or the interfaces (the incident
 #6 rule). Tested against stubs for a leaked interface, one still detaching, a
 VPC already gone, and a failing AWS call.
 
+**9b — the first fix put the cleanup in the wrong place.** The next session's
+destroy failed again, after 28 minutes, in stage 1: `DeleteSecurityGroup
+(sg-0a6052d1…) DependencyViolation`. Stage 1 targeted `module.eks` to remove
+"the cluster and its nodes", but `module.eks` also owns the node security
+group, and the EKS managed node group sub-module creates a security group
+of its own as well. The interface leaked as the nodes terminated, still held
+one of those groups, and stage 1 could not finish, so stage 2's cleanup never
+ran. The NAT gateway was left billing (`make running` caught it) until the
+interface was deleted by hand and a second destroy finished in 2 m 12 s.
+The stub tests had passed because they modelled the order of the stages,
+not which security groups belong to which module. Stage 1 now targets only
+the node group resource itself,
+`module.eks.module.eks_managed_node_group["system"].aws_eks_node_group.this[0]`
+(read from the module source, not assumed). Stage 3 now cleans up and retries
+once if a `DependencyViolation` still slips through.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass
