@@ -94,51 +94,150 @@ interface, run 45471188269 finished the destroy in 42 s and its
 
 ## 1. Platform install (from the apply run)
 
+Run 45492365744, apply, 15 m 6 s, including the "Install Karpenter, NVIDIA
+device plugin, GPU NodePool" step. From the Mac afterwards:
+
 ```
-<kubectl get nodepool,ec2nodeclass from the job summary>
+NAME                        NODECLASS   NODES   READY   AGE
+nodepool.karpenter.sh/gpu   gpu         0       True    33s
+
+NAME                                 READY   AGE
+ec2nodeclass.karpenter.k8s.aws/gpu   True    33s
 ```
+
+(An earlier attempt, run 45481002997, applied fine but a destroy queued
+behind it in the workflow's concurrency group, 45481162719, ran as soon as it
+was approved, so the cluster was gone before the smoke test. Lesson: start
+apply and destroy as separate steps, never from one pasted block.)
 
 ## 2. Cold start: zero GPU nodes to model answering
 
+2026-11-24, vLLM v0.34.0, `Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28`.
+
 ```
-<vllm-smoke.sh timeline: NodeClaim created, GPU node Ready (type, spot/on-demand, AZ),
- pod scheduled, image Pulled (duration), vLLM Ready>
+[21:51:12Z +0s] Deploying vLLM
+[21:51:29Z +17s] NodeClaim created: gpu-vjz6f
+[21:52:00Z +48s] GPU node Ready: ip-10-40-26-213.ec2.internal, g6.xlarge on-demand us-east-1a
+[21:52:15Z +63s] Pod scheduled: vllm-697bdc49bb-27f49
+[21:58:33Z +441s] vLLM Ready (model loaded)
+
+-- Image pull and container start (pod events):
+  Pulled: Successfully pulled image "vllm/vllm-openai:v0.34.0" in 2m48.634s (2m48.634s including waiting). Image size: 10036574238 bytes.
+  Started: Container started
 ```
 
 | Step | Seconds from deploy |
 |---|---|
-| NodeClaim created | |
-| GPU node Ready | |
-| Image pulled (and pull duration) | |
-| vLLM Ready (weights downloaded and loaded) | |
+| NodeClaim created | 17 |
+| GPU node Ready (`g6.xlarge`, On-Demand, us-east-1a) | 48 |
+| Pod scheduled | 63 |
+| Image pulled (10.04 GB in 169 s) | ~232 |
+| vLLM Ready (weights downloaded and loaded, CUDA graphs captured) | **441** |
+
+About 209 s of the 441 came after the image pull: downloading ~15 GB of
+weights, loading them (36.6 s on the earlier run), compiling and capturing
+CUDA graphs. Node launch varied a lot between sessions: 48 s here, 224 s
+(NodeClaim to Ready) in the morning run.
 
 ## 3. GPU and driver
 
 ```
-<nvidia-smi line: name, driver_version, memory.used, memory.total>
+NVIDIA L4, 580.178.04, 19462 MiB, 23034 MiB
 ```
+
+Driver 580.178.04 meets vLLM v0.34.0's CUDA 13.0 requirement (≥ 580), which
+closes the ADR 0003 risk. 19.0 of 22.5 GiB in use matches
+`--gpu-memory-utilization=0.90` (weights ~14.3 GiB + KV cache + graphs).
 
 ## 4. Serving
 
 ```
-<"/v1/models", one completion, single-stream tokens/s, 4-way aggregate tokens/s, vLLM metrics>
+== /v1/models
+{"id":"qwen2.5-7b-instruct","root":"Qwen/Qwen2.5-7B-Instruct","max_model_len":8192}
+
+== One completion
+  2.067289s, 33 tokens: "A Kubernetes readiness probe checks if a container is ready to start accepting traffic, ensuring that only healthy instances of a pod are considered ready and can receive workloads."
+
+== Single-stream throughput (512 tokens, temperature 0)
+  512 tokens in 29.030324s = 17.6 tokens/s (includes prefill)
+
+== 4 concurrent requests (batching)
+  2048 tokens in 29.7s = 69.0 tokens/s aggregate
+
+== vLLM metrics
+  vllm:kv_cache_usage_perc{engine="0",model_name="qwen2.5-7b-instruct"} 0.0
+  vllm:prompt_tokens_total{engine="0",model_name="qwen2.5-7b-instruct"} 248.0
+  vllm:generation_tokens_total{engine="0",model_name="qwen2.5-7b-instruct"} 2593.0
 ```
+
+- **17.6 tokens/s single-stream is close to the hardware ceiling.** Decoding
+  reads all ~15 GB of bf16 weights per token, and the L4's memory bandwidth is
+  ~300 GB/s, so the ceiling is ~20 tokens/s; this is ~88% of it.
+- **4 concurrent requests: 69.0 tokens/s, 3.9× single-stream** in about the
+  same wall time. Continuous batching makes extra concurrent users nearly
+  free until KV cache or compute runs out: the core cost argument for
+  self-hosting under load, to be priced in Phase 7.
+- Unlike the Phase 0 0.5B model (which got readiness probes wrong), this
+  answer is correct.
 
 ## 5. Scale to zero
 
 ```
-<"Scaling vLLM to zero" ... "GPU node removed by Karpenter" with times>
+[21:59:39Z +0s] Scaling vLLM to zero
+[22:09:00Z +561s] GPU node removed by Karpenter
 ```
+
+Removal took 9 m 21 s against `consolidateAfter: 2m`. Not yet explained;
+measure in Phase 3 where scale-to-zero timing matters (the node bills the
+whole time). Spot capacity was again unavailable, so On-Demand both sessions.
 
 ## 6. Teardown
 
+- Run 45498859255 (destroy): "Remove Karpenter nodes and add-ons" passed;
+  stage 1 of the staged destroy failed after 28 m 39 s on
+  `DeleteSecurityGroup (sg-0a6052d1…) DependencyViolation`. Incident #9b.
+  `make running` showed the NAT gateway `nat-056a829728137eb6f` still billing.
+- Leaked interface deleted by hand; run 45505239084 (destroy) finished in
+  2 m 12 s and its "Verify nothing is left billing" step passed:
+
 ```
-<destroy run: "Remove Karpenter nodes and add-ons" step, Destroy complete, whats-running>
+Checking us-east-1 as romeopeay
+
+ok EKS clusters: none
+ok NAT gateways: none
+ok Running EC2 instances: none
+ok Load balancers: none
+ok Unattached EBS volumes: none
+ok Unassociated Elastic IPs: none
+
+Verified: nothing billable by the hour in us-east-1.
 ```
 
 ## Cost of this phase
 
-| Item | Window (UTC) | Hours | Rate | Est. cost |
+Estimated from run and log times (UTC, 2026-11-24) at ~$0.23/h for the
+cluster (EKS + NAT + 2 × t3.medium; the NAT alone ~$0.045/h when it outlived
+the cluster) and ~$0.80/h for an On-Demand `g6.xlarge`.
+
+| Session | What happened | Cluster hours | GPU hours | Est. cost |
 |---|---|---|---|---|
-| Cluster (EKS + NAT + 2 × t3.medium) | | | ~$0.23/h | |
-| GPU node (type, Spot/On-Demand) | | | | |
+| A, ~16:20–16:41 | Apply failed on the policy size limit (#7), destroyed | 0.35 | 0 | $0.08 |
+| B, ~17:00–19:36 | Platform up; vLLM crash loop (#8); stuck destroy (#9) | 2.4 | ~0.75 | $1.15 |
+| C, ~20:40–21:28 | Apply, then a queued destroy removed it before use | 0.8 | 0 | $0.18 |
+| D, ~21:35–22:57 | **Gate passed**; destroy stuck again (#9b), NAT until 22:57 | 1.4 | 0.29 | $0.55 |
+| **Total** | | **~5.0** | **~1.0** | **~$2.00** |
+
+The passing run itself (GPU from 21:51:29 to 22:09:00) used about 18 minutes
+of GPU, roughly $0.23. Everything else was the cost of finding incidents
+#7, #8, #9 and #9b. To do: replace the estimate with Cost Explorer
+(`Project = self-hosted-llm-platform`) once billing data lands.
+
+## Phase 2 result
+
+**Gate passed on 2026-11-24.** From zero GPU nodes, Karpenter launched a
+`g6.xlarge` (On-Demand; no Spot capacity) and vLLM served
+Qwen2.5-7B-Instruct after a 7 m 21 s cold start, at 17.6 tokens/s single-stream
+and 69.0 tokens/s with 4 concurrent requests; scaling to zero removed the GPU
+node. Four incidents found on the way: #7 (IAM policy size), #8 (Service-link
+environment variable vs vLLM's own setting), #9 and #9b (leaked VPC CNI
+interfaces blocking teardown, and the first fix's wrong staging).

@@ -3,7 +3,7 @@
 Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-zero), with an LLM gateway for routing, fallback and cost control, and a CI eval gate that blocks regressions.
 
 <!-- Badges: fill in once each claim is true, not before. -->
-![Status](https://img.shields.io/badge/Status-Phases_0_and_1_verified-yellow?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Phases_0--2_verified-yellow?style=flat-square)
 ![Incidents](https://img.shields.io/badge/Incidents-9_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
@@ -129,10 +129,21 @@ AWS access keys stored in GitHub       → none (two role ARNs, as secrets)
 Cost of the phase                      → ~$0.30 estimated (77 cluster-minutes)
 ```
 
-AWS (Phases 2–7), not yet run:
+Phase 2, self-hosted model on a GPU (us-east-1, 2026-11-24). Full output:
+[`docs/evidence/phase-2.md`](docs/evidence/phase-2.md).
 
 ```
-kubectl get nodes (GPU group at 0)     → <output>
+Zero GPU nodes → vLLM answering        → 7m21s cold start (node Ready in 48s, image pull 2m49s)
+GPU node                               → g6.xlarge, NVIDIA L4, driver 580.178.04, On-Demand (no Spot capacity)
+Qwen2.5-7B-Instruct bf16, single stream → 17.6 tokens/s (~88% of the L4's memory-bandwidth ceiling)
+4 concurrent requests                  → 69.0 tokens/s aggregate (3.9×)
+Scale vLLM to zero                     → GPU node removed by Karpenter after 9m21s
+Cost of the phase                      → ~$2 estimated, ~$0.23 of it the passing run
+```
+
+AWS (Phases 3–7), not yet run:
+
+```
 first request after idle (cold start)  → <seconds to first token, node spin-up time>
 POST /v1/chat (self-hosted)            → <response, latency, tokens>
 POST /v1/chat (vLLM killed mid-test)   → <fallback to Claude API, latency delta>
