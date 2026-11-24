@@ -157,6 +157,11 @@ module "karpenter" {
   node_iam_role_use_name_prefix = false
   queue_name                    = "${local.name}-karpenter"
 
+  # The controller policy names the cluster, node role and queue ~17 times;
+  # with this project's long names it exceeds the 6,144-character limit for
+  # managed policies (incident #7). Inline role policies allow 10,240.
+  enable_inline_policy = true
+
   # Pod Identity for kube-system/karpenter (the eks-pod-identity-agent
   # add-on is already installed).
   create_pod_identity_association = true
