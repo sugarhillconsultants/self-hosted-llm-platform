@@ -199,6 +199,31 @@ are 0 (verified clean), 1 (billable resources found) and 2 (could not
 verify). All four paths (expired token, clean, resources running, one check
 denied) were exercised against a stubbed `aws` command.
 
+## 7. The Karpenter controller's IAM policy was too long for IAM
+
+The first Phase 2 apply stopped partway with `LimitExceeded: Cannot exceed
+quota for PolicySize: 6144`, creating `module.karpenter.aws_iam_policy.controller`.
+The VPC, NAT gateway and EKS cluster had already been created, so the
+environment was destroyed straight away and the fix shipped through a PR.
+
+IAM caps a managed policy at 6,144 characters (whitespace excluded). The
+Karpenter sub-module's controller policy refers to the cluster name, the node
+role and the interruption queue about 17 times, and this project's naming
+(`self-hosted-llm-platform-demo-karpenter-node` and so on) is long enough to
+push it over. Nothing before apply could see this: `validate` and `plan` don't
+check policy size, and IAM enforces it only at creation. The module's own
+variable documentation names this exact error and the remedy,
+`enable_inline_policy = true`, which attaches the same statements as an inline
+role policy, whose limit is 10,240 characters.
+
+**Tradeoff accepted:** an inline policy can't be reused or attached elsewhere,
+which doesn't matter for a role that exists only for this controller.
+Shortening every name would have kept a managed policy but touched the
+cluster, roles, scripts and manifests for no other benefit. **What
+transferred:** the pattern from incident #5. A cloud API's validation is the
+only test of some rules, so a first apply in a disposable environment is part
+of the test plan, and the teardown has to be ready before it.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

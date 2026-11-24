@@ -45,6 +45,14 @@ make running
   deleted).
 - Not yet done: anything on a real GPU.
 
+## 0. First apply attempt (2026-11-24)
+
+Failed creating the Karpenter controller policy:
+`LimitExceeded: Cannot exceed quota for PolicySize: 6144` (incident #7). The
+partly built environment was destroyed straight after. PR plan before the
+attempt: **Plan: 78 to add, 0 to change, 0 to destroy** (Phase 1's 56 plus
+22 for Karpenter). Model pinned to `Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28`.
+
 ## 1. Platform install (from the apply run)
 
 ```
