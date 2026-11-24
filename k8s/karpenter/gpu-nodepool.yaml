@@ -1,0 +1,49 @@
+# One GPU at most, Spot first, On-Demand when Spot has no capacity, and
+# removed when nothing is using it: the "scale to zero" is Karpenter
+# deleting the node once the vLLM pod is gone (ADR 0010).
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: gpu
+spec:
+  template:
+    metadata:
+      labels:
+        node-role: gpu
+        # The NVIDIA device plugin only schedules onto nodes with this label
+        # (or NFD's PCI label); there's no NFD in this cluster.
+        nvidia.com/gpu.present: "true"
+    spec:
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: gpu
+      # Only pods that tolerate this (vLLM, the device plugin) land here.
+      taints:
+        - key: nvidia.com/gpu
+          value: "true"
+          effect: NoSchedule
+      requirements:
+        # g6 = NVIDIA L4, 24 GB. xlarge: 4 vCPU / 16 GiB; 2xlarge: 8 / 32.
+        - key: karpenter.k8s.aws/instance-family
+          operator: In
+          values: ["g6"]
+        - key: karpenter.k8s.aws/instance-size
+          operator: In
+          values: ["xlarge", "2xlarge"]
+        # Both allowed: Karpenter picks the cheaper (Spot) and falls back to
+        # On-Demand when Spot capacity is unavailable.
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values: ["spot", "on-demand"]
+        - key: kubernetes.io/arch
+          operator: In
+          values: ["amd64"]
+      # Replace any GPU node after a day, so a forgotten one can't age.
+      expireAfter: 24h
+  # Hard cap: never more than one GPU, whatever is pending.
+  limits:
+    nvidia.com/gpu: 1
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 2m

@@ -1,0 +1,10 @@
+# Helm values for oci://public.ecr.aws/karpenter/karpenter, version in
+# scripts/k8s-platform.sh. settings.clusterName and settings.interruptionQueue
+# are passed by the script from Terraform outputs.
+replicas: 1                      # demo cluster; 2 for anything real
+serviceAccount:
+  name: karpenter                # matches the Pod Identity association
+controller:
+  resources:
+    requests: {cpu: 250m, memory: 256Mi}
+    limits: {memory: 512Mi}

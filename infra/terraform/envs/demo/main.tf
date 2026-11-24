@@ -1,6 +1,8 @@
 # The demo environment: built for timed sessions, torn down after each.
 # Approximate running cost: EKS control plane $0.10/h + one NAT gateway
 # ~$0.045/h + 2 x t3.medium ~$0.083/h, about $0.23/hour or $5.50/day if left on.
+# A GPU node adds roughly $0.30-0.90/h (g6.xlarge, Spot vs On-Demand) only
+# while vLLM is running; Karpenter removes it when nothing needs it.
 
 data "aws_availability_zones" "available" {
   state = "available"
@@ -41,6 +43,8 @@ module "vpc" {
   }
   private_subnet_tags = {
     "kubernetes.io/role/internal-elb" = 1
+    # Karpenter launches GPU nodes into subnets carrying this tag.
+    "karpenter.sh/discovery" = local.name
   }
 }
 
@@ -113,6 +117,11 @@ module "eks" {
     coredns    = {}
   }
 
+  # Karpenter attaches GPU nodes to the security group carrying this tag.
+  node_security_group_tags = {
+    "karpenter.sh/discovery" = local.name
+  }
+
   eks_managed_node_groups = {
     system = {
       ami_type       = "AL2023_x86_64_STANDARD"
@@ -125,6 +134,38 @@ module "eks" {
         "node-role" = "system"
       }
     }
+  }
+}
+
+# --- GPU nodes: Karpenter --------------------------------------------------------
+# AWS side only: the controller's IAM role (via EKS Pod Identity), the node IAM
+# role and its access entry, and the SQS queue + EventBridge rules that warn of
+# Spot interruptions. The controller itself, the GPU NodePool and the NVIDIA
+# device plugin are installed by scripts/k8s-platform.sh, not Terraform
+# (ADR 0011). GPU nodes are launched on demand and are not in this state.
+
+module "karpenter" {
+  source  = "terraform-aws-modules/eks/aws//modules/karpenter"
+  version = "21.30.2"
+
+  cluster_name = module.eks.cluster_name
+
+  # Fixed names, so k8s/karpenter/*.yaml and the scripts can refer to them.
+  iam_role_name                 = "${local.name}-karpenter-controller"
+  iam_role_use_name_prefix      = false
+  node_iam_role_name            = "${local.name}-karpenter-node"
+  node_iam_role_use_name_prefix = false
+  queue_name                    = "${local.name}-karpenter"
+
+  # Pod Identity for kube-system/karpenter (the eks-pod-identity-agent
+  # add-on is already installed).
+  create_pod_identity_association = true
+  namespace                       = "kube-system"
+  service_account                 = "karpenter"
+
+  # Lets you open a shell on a GPU node through SSM for debugging; no SSH keys.
+  node_iam_role_additional_policies = {
+    ssm = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
   }
 }
 

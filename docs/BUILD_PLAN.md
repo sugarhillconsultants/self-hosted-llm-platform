@@ -55,20 +55,28 @@ nothing billable (`make running`).
 
 ## Phase 2 — Self-hosted model on a GPU node
 
-**Goal:** a real open-weight model served on EKS.
+**Goal:** a real open-weight model served on EKS, on a GPU node that exists
+only while something needs it.
 
-- `modules/gpu-nodegroup`: spot GPU instances (start with a single 24 GB
-  card class), `min_size = 0`, taint `nvidia.com/gpu=true:NoSchedule`.
-- NVIDIA device plugin (via the EKS-optimized GPU AMI or the GPU operator —
-  record the choice as an ADR).
-- `k8s/vllm/`: Deployment pinned to an exact image digest, model weights
-  pulled from the Hub at a pinned revision, readiness probe on `/health`,
-  generous startup probe (model load is slow — expect this to be an incident).
-- Pick a model that fits one card with headroom (7–8B instruct class) and
-  record why in an ADR.
+- **Prerequisite (done 2026-11-23):** G-family Spot quota raised from 0 to 8
+  vCPUs (On-Demand was already 768).
+- Karpenter (ADR 0010) instead of a GPU managed node group: one `gpu`
+  NodePool, g6 (NVIDIA L4), Spot first with On-Demand fallback, at most one
+  GPU, removed 2 minutes after it's empty. Terraform creates its IAM, queue
+  and discovery tags; `scripts/k8s-platform.sh` installs the controller, the
+  NVIDIA device plugin and the NodePool (ADR 0011).
+- AL2023 NVIDIA AMI + device plugin chart (ADR 0003).
+- `k8s/vllm/`: vLLM v0.34.0 serving `Qwen/Qwen2.5-7B-Instruct` (ADR 0001),
+  weights pinned to a commit, a 25-minute startup probe for cold starts.
+- `scripts/vllm-smoke.sh`: deploys vLLM, times every step from "no GPU" to
+  "model answering", measures throughput, then scales to zero and times the
+  node's removal.
 
-**Gate:** pod scheduled on the GPU node; `/v1/models` lists the model; one
-completion returns; tokens/s from vLLM's own metrics recorded in evidence.
+**Gate:** from zero GPU nodes, deploying vLLM causes Karpenter to launch one;
+`/v1/models` lists the model; a completion returns; single-stream and
+4-way tokens/s recorded; scaling vLLM to zero makes the GPU node disappear;
+the evidence includes instance type, Spot or On-Demand, driver version and
+the cold-start timeline.
 
 ## Phase 3 — Scale-to-zero autoscaling on the right signal
 
@@ -168,6 +176,11 @@ to see which predictions were right and which failures were genuinely new.
 - Startup/readiness probes killing vLLM while it's still loading weights.
 - GPU node coming up without the device plugin ready; pod stuck `Pending`.
 - Spot capacity unavailable for the chosen instance type in the chosen AZs.
+- The AMI's NVIDIA driver older than vLLM's CUDA 13.0 build needs (≥ 580).
+- vLLM's image (~10 GB) and the weights (~15 GB) making cold start the
+  dominant number, not inference.
+- The vLLM pod's memory limit killing it while weights load (16 GiB node).
+- Teardown racing Karpenter: `terraform destroy` before its nodes are gone.
 - KEDA scaling to zero and the first request timing out at the load balancer
   before a node is even provisioned.
 - OIDC trust-policy `sub` claim mismatch (the same class of bug as the Azure

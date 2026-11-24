@@ -1,0 +1,40 @@
+# How Karpenter launches a GPU node. Names and tags come from
+# infra/terraform/envs/demo (module "karpenter" and the discovery tags).
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: gpu
+spec:
+  role: self-hosted-llm-platform-demo-karpenter-node
+  # EKS-optimized Amazon Linux 2023. For GPU instance types Karpenter picks
+  # the NVIDIA variant (driver + container toolkit preinstalled); the device
+  # plugin is installed separately (ADR 0003). vLLM v0.34 is built on CUDA
+  # 13.0 and needs driver >= 580: scripts/vllm-smoke.sh prints the version.
+  amiSelectorTerms:
+    - alias: al2023@latest
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: self-hosted-llm-platform-demo
+  securityGroupSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: self-hosted-llm-platform-demo
+  # The vLLM image (~10 GB compressed) and the model weights (~15 GB) both
+  # land on the root volume; the AMI default (20 GiB) is far too small.
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 150Gi
+        volumeType: gp3
+        iops: 3000
+        throughput: 250
+        encrypted: true
+        deleteOnTermination: true
+  # IMDSv2 only, and not reachable from pods (hop limit 1).
+  metadataOptions:
+    httpEndpoint: enabled
+    httpTokens: required
+    httpPutResponseHopLimit: 1
+  tags:
+    Project: self-hosted-llm-platform
+    Environment: demo
+    ManagedBy: karpenter
