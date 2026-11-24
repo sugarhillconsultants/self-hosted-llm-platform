@@ -53,6 +53,37 @@ partly built environment was destroyed straight after. PR plan before the
 attempt: **Plan: 78 to add, 0 to change, 0 to destroy** (Phase 1's 56 plus
 22 for Karpenter). Model pinned to `Qwen/Qwen2.5-7B-Instruct@a09a35458c702b33eeacc393d103063234e8bc28`.
 
+## 0b. First smoke test (2026-11-24): GPU worked, vLLM crash-looped
+
+The second apply (with the incident #7 fix) succeeded and installed the
+platform (`nodepool.karpenter.sh/gpu  NODES 0  READY True`). Then:
+
+```
+[17:20:13Z +0s] Deploying vLLM
+[17:20:30Z +17s] NodeClaim created: gpu-c6k27
+[17:24:14Z +241s] GPU node Ready: ip-10-40-17-166.ec2.internal, g6.xlarge on-demand us-east-1a
+[17:24:28Z +255s] Pod scheduled: vllm-86cc8bcdc-b69w4
+Successfully pulled image "vllm/vllm-openai:v0.34.0" in 2m48.205s. Image size: 10036574238 bytes.
+[17:50:18Z +1805s] Gave up after 30 minutes.
+```
+
+From the crashed container's log, everything up to the last step worked:
+
+```
+Loading weights took 36.59 seconds
+Model loading took 14.29 GiB memory and 39.998897 seconds
+Available KV cache memory: 4.31 GiB
+Capturing CUDA graphs (PIECEWISE): 100% 51/51 ... (FULL): 100% 35/35
+ValueError: VLLM_PORT 'tcp://172.20.253.250:8000' appears to be a URI.   <- incident #8
+```
+
+- **Driver:** CUDA graphs captured, so the AMI's NVIDIA driver runs vLLM's
+  CUDA 13.0 build (the ADR 0003 risk did not happen).
+- **Spot:** none available. Karpenter launched On-Demand, then tried every 5
+  minutes to consolidate onto Spot (`savings: $0.28`); each `CreateFleet`
+  returned `UnfulfillableCapacity` for `g6.xlarge` Spot in us-east-1.
+- GPU node scaled away after the logs were saved (`replicas=0`).
+
 ## 1. Platform install (from the apply run)
 
 ```

@@ -48,6 +48,16 @@ while :; do
   if [[ -n "$pod" ]] && [[ "$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')" == "True" ]]; then
     ts "vLLM Ready (model loaded)"; break
   fi
+  # Fail fast on a crash loop instead of waiting out the timeout with a GPU
+  # billing (incident #8 waited 30 minutes through 8 identical crashes).
+  restarts=$(kubectl -n "$NS" get pod "$pod" -o jsonpath='{.status.containerStatuses[0].restartCount}' 2>/dev/null)
+  if [[ "${restarts:-0}" -ge 2 ]]; then
+    ts "vLLM crashed $restarts times. Last error:"
+    kubectl -n "$NS" logs "$pod" --previous --tail=200 2>/dev/null \
+      | grep -E 'Error|ERROR|raise|Exception' | grep -v 'File "' | tail -8 | sed 's/^/  /'
+    echo "Scale down to stop the GPU billing: kubectl -n $NS scale deployment/vllm --replicas=0"
+    exit 1
+  fi
   if (( $(date +%s) - T0 > 1800 )); then
     ts "Gave up after 30 minutes. Diagnose with:"
     echo "  kubectl -n $NS describe pod $pod | tail -30"

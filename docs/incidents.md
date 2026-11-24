@@ -224,6 +224,39 @@ transferred:** the pattern from incident #5. A cloud API's validation is the
 only test of some rules, so a first apply in a disposable environment is part
 of the test plan, and the teardown has to be ready before it.
 
+## 8. Kubernetes named an environment variable after the Service, and vLLM read it as its own setting
+
+The first Phase 2 smoke test got further than any earlier attempt: Karpenter
+launched a `g6.xlarge` from zero in 4 minutes, the 10 GB vLLM image pulled in
+2 m 48 s, and then the pod never became ready. `vllm-smoke.sh` waited its full
+30 minutes. The pod log's last 20 lines showed only `RuntimeError: Engine core
+initialization failed. See root cause above`, with the cause cut off above the
+tail.
+
+The full log (`kubectl logs --previous`) showed that every part I had been
+worried about worked. The weights loaded in 36.6 s (14.29 GiB), 4.31 GiB was
+left for KV cache, and CUDA graphs captured, which also settled the open
+question from ADR 0003: the AMI's driver runs vLLM's CUDA 13 build. Then, at
+the very end of startup:
+`ValueError: VLLM_PORT 'tcp://172.20.253.250:8000' appears to be a URI. This may
+be caused by a Kubernetes service discovery issue`. Kubernetes injects
+Docker-link-style variables for every Service in a pod's namespace,
+`<NAME>_PORT=tcp://<cluster-ip>:<port>` among them. I had named the Service
+`vllm`, so every pod got `VLLM_PORT`, which is also the name of one of vLLM's
+own configuration variables. The pod crashed 8 times, about 2 minutes each.
+
+Fixed with `enableServiceLinks: false` on the vLLM pod, which turns the
+injected variables off; services are reached by DNS name. Renaming the
+Service would also have worked, but would leave the same trap for any future
+Service whose name collides with an application's settings. Two changes
+came out of the same run. `vllm-smoke.sh` now stops at the second crash and
+prints the error lines instead of waiting out the timeout with a GPU billing.
+And the vLLM pod is annotated `karpenter.sh/do-not-disrupt`: Karpenter had been
+trying every 5 minutes to replace the On-Demand GPU node with a cheaper Spot
+one ("savings: $0.28"). Each attempt failed with `UnfulfillableCapacity`
+because no `g6.xlarge` Spot capacity was available, but had one succeeded it
+would have evicted vLLM mid-startup and thrown away the cold start.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

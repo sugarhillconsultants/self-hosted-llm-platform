@@ -15,10 +15,18 @@ spec:
     metadata:
       labels: {app: vllm}
       annotations:
+        # Never evict to swap in a cheaper node: a cold start costs minutes
+        # of GPU time, more than consolidation would save (incident #8).
+        karpenter.sh/do-not-disrupt: "true"
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
         prometheus.io/path: /metrics
     spec:
+      # Kubernetes injects <SERVICE>_PORT=tcp://... for every Service in the
+      # namespace. The Service named "vllm" becomes VLLM_PORT, which vLLM
+      # reads as its own setting and crashes on (incident #8). Services are
+      # reached by DNS name, so nothing here needs these variables.
+      enableServiceLinks: false
       nodeSelector:
         node-role: gpu
       tolerations:

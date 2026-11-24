@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-Phases_0_and_1_verified-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-7_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-8_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -170,7 +170,7 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-Seven incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+Eight incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
 
 - Request models defined inside the FastAPI app factory were silently read
   as missing query parameters, because of postponed annotations. Caught by
@@ -199,6 +199,10 @@ Seven incidents so far, documented in full in [`docs/incidents.md`](docs/inciden
   project's long resource names it exceeded IAM's 6,144-character limit for
   managed policies. Switched to an inline policy (10,240), the remedy the
   module itself documents.
+- vLLM crash-looped at the end of startup: Kubernetes injects
+  `<SERVICE>_PORT` variables, and the Service named `vllm` produced
+  `VLLM_PORT`, one of vLLM's own settings. Fixed with
+  `enableServiceLinks: false`; the smoke test now fails fast on a crash loop.
 
 ## Running it
 
