@@ -169,6 +169,12 @@ jobs:
           echo "TF_STATE_BUCKET=$PROJECT-tfstate-$account" >> "$GITHUB_ENV"
       - name: init
         run: terraform init -input=false -backend-config="bucket=$TF_STATE_BUCKET"
+      # Karpenter's GPU nodes aren't in Terraform state; left running they bill
+      # and block the VPC from being deleted. Fails the job if it can't verify.
+      - name: Remove Karpenter nodes and add-ons
+        if: inputs.action == 'destroy'
+        working-directory: ${{ github.workspace }}
+        run: ./scripts/k8s-platform.sh down
       - name: ${{ inputs.action }}
         run: |
           set -o pipefail
@@ -182,6 +188,16 @@ jobs:
         run: |
           aws eks update-kubeconfig --region "$AWS_REGION" --name "$(terraform output -raw cluster_name)"
           kubectl get nodes -o wide | tee nodes.txt
+      - name: Install Karpenter, NVIDIA device plugin, GPU NodePool
+        if: inputs.action == 'apply'
+        working-directory: ${{ github.workspace }}
+        run: |
+          ./scripts/k8s-platform.sh up
+          { echo; kubectl get nodepool,ec2nodeclass; } | tee -a infra/terraform/envs/demo/nodes.txt
+      - name: Verify nothing is left billing
+        if: inputs.action == 'destroy'
+        working-directory: ${{ github.workspace }}
+        run: ./scripts/whats-running.sh
       - name: Job summary
         if: always()
         run: |

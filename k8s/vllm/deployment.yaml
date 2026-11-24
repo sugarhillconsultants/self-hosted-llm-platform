@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm
+  namespace: llm
+  labels: {app: vllm}
+spec:
+  replicas: 1
+  # A second pod would need a second GPU, which the NodePool forbids.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: {app: vllm}
+  template:
+    metadata:
+      labels: {app: vllm}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: /metrics
+    spec:
+      nodeSelector:
+        node-role: gpu
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:v0.34.0   # CUDA 13.0 build; needs driver >= 580
+          command: ["vllm", "serve"]
+          args:
+            - $(MODEL)
+            - --revision=$(MODEL_REVISION)
+            - --served-model-name=$(SERVED_MODEL_NAME)
+            - --host=0.0.0.0
+            - --port=8000
+            # 8k context leaves ~5 GB of the L4's 24 GB for KV cache after
+            # ~15 GB of bf16 weights.
+            - --max-model-len=8192
+            - --gpu-memory-utilization=0.90
+          envFrom:
+            - configMapRef:
+                name: vllm-model
+          env:
+            - name: HF_HOME
+              value: /models
+            # Only needed for gated models; Qwen2.5 isn't gated.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: {name: hf-token, key: token, optional: true}
+          ports:
+            - name: http
+              containerPort: 8000
+          resources:
+            requests:
+              cpu: "3"
+              memory: 11Gi
+              nvidia.com/gpu: 1
+            limits:
+              nvidia.com/gpu: 1
+          # /health is 200 only once the model is loaded. Cold start =
+          # node launch + ~10 GB image pull + ~15 GB model download + load,
+          # so allow up to 25 minutes before giving up.
+          startupProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 10
+            failureThreshold: 150
+          readinessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: {path: /health, port: http}
+            periodSeconds: 20
+            failureThreshold: 6
+          volumeMounts:
+            - name: models
+              mountPath: /models
+            - name: shm
+              mountPath: /dev/shm
+      volumes:
+        # On the node's root volume; gone with the node (cold-start cost is
+        # measured in Phase 3).
+        - name: models
+          emptyDir:
+            sizeLimit: 60Gi
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 2Gi

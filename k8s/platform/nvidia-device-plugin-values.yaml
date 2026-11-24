@@ -1,0 +1,4 @@
+# Helm values for nvidia/nvidia-device-plugin, version in scripts/k8s-platform.sh.
+# Chart defaults already tolerate the nvidia.com/gpu taint and require the
+# nvidia.com/gpu.present=true label, which the gpu NodePool sets.
+priorityClassName: system-node-critical

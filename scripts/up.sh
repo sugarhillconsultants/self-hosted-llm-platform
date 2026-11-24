@@ -15,5 +15,7 @@ tf_init
 terraform -chdir="$DEMO_DIR" apply -input=false
 aws eks update-kubeconfig --region "$AWS_REGION" --name "$(terraform -chdir="$DEMO_DIR" output -raw cluster_name)"
 kubectl get nodes -o wide
+"$ROOT/scripts/k8s-platform.sh" up
 echo
-echo "Up in $(( ($(date +%s) - start) / 60 )) min. Now costing ~\$0.23/hour: run ./scripts/down.sh when finished."
+echo "Up in $(( ($(date +%s) - start) / 60 )) min. Now costing ~\$0.23/hour (plus a GPU node"
+echo "while vLLM runs): run ./scripts/down.sh when finished."

@@ -74,15 +74,16 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | Path | What it does |
 |---|---|
 | `infra/terraform/bootstrap/` | $50/month budget alarm, S3 state bucket (native locking), GitHub OIDC provider, `plan` and `apply` roles. Applied once, by hand. |
-| `infra/terraform/envs/demo/` | VPC, EKS with 2 CPU nodes and access entries, ECR repo. Created per session, destroyed after (~$0.23/hour). |
+| `infra/terraform/envs/demo/` | VPC, EKS with 2 CPU nodes and access entries, ECR repo, Karpenter IAM and Spot-interruption queue. Created per session, destroyed after (~$0.23/hour, plus a GPU only while vLLM runs). |
 | `infra/terraform/modules/budget` | AWS Budget with actual and forecast alerts; the cost guardrail is infrastructure, not a promise |
 | `infra/terraform/modules/github-oidc` | OIDC provider + two roles, each trusted by exactly one kind of workflow run |
 | `infra/terraform/modules/ecr` | Image repository with immutable tags and a lifecycle policy |
 | `infra/terraform/modules/cluster-admins` | Who gets EKS cluster-admin besides the applier; pure logic with `terraform test` cases |
-| `infra/terraform/modules/gpu-nodegroup` | Phase 2: GPU node group on spot instances, min size 0 |
 | `infra/terraform/modules/iam-irsa` | Phase 4: pod-level IAM (gateway reads secrets; nothing else gets AWS access) |
-| `k8s/vllm/` | vLLM Deployment/Service, model + adapter config, GPU tolerations |
-| `k8s/keda/` | ScaledObject: scale vLLM on waiting-request queue depth, not CPU; to zero when idle |
+| `k8s/vllm/` | vLLM v0.34.0 serving Qwen2.5-7B-Instruct (weights pinned to a commit) on the GPU node; 25-minute startup probe for cold starts |
+| `k8s/karpenter/` | The `gpu` NodePool (g6 / NVIDIA L4, Spot first, max 1 GPU, removed when empty) and its EC2NodeClass |
+| `k8s/platform/` | Helm values for Karpenter and the NVIDIA device plugin |
+| `k8s/keda/` | Phase 3: scale vLLM on waiting-request queue depth, not CPU; to zero when idle |
 | `k8s/gateway/` | Gateway Deployment and Service (Ingress and HPA come in Phase 4) |
 | `k8s/local-model/` | Phase 0 stand-in for vLLM: llama.cpp server on CPU, same OpenAI-compatible API |
 | `k8s/overlays/local/` | kind overlay: base + gateway + local model + NodePort on localhost:8000 |
@@ -96,7 +97,7 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `prompts/` | Versioned prompt templates; a change here triggers the eval gate |
 | `loadtest/` | Load scripts that produce the latency/cost numbers in this README |
 | `local/` | `kind-up.sh`, `kind-down.sh`, `smoke-test.sh`: the Phase 0 request path on a laptop, no GPU, no AWS bill |
-| `scripts/` | `up.sh` / `down.sh` (create/destroy `envs/demo` from your Mac), `whats-running.sh` (anything still billing?) |
+| `scripts/` | `up.sh` / `down.sh` (whole environment), `k8s-platform.sh up/down` (Karpenter, device plugin, NodePool; removes GPU nodes before destroy), `vllm-smoke.sh` (Phase 2 gate), `pin-model.sh`, `whats-running.sh` |
 | `.github/workflows/` | `test.yml` (gateway tests + image build); `terraform.yml` (plan on PR, manual apply/destroy); `eval-gate.yml`, `deploy.yml` in later phases |
 | `docs/` | Build plan, architecture, ADRs, incidents, evidence (screenshots, raw outputs) |
 
