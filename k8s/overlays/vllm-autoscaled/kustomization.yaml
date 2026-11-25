@@ -1,0 +1,13 @@
+# vLLM under KEDA control (Phase 3): starts at 0 replicas, so applying it never
+# launches a GPU by itself; the ScaledObject takes over from there.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../vllm
+  - ../../keda
+patches:
+  - target: {kind: Deployment, name: vllm}
+    patch: |-
+      - op: add
+        path: /spec/replicas
+        value: 0

@@ -16,6 +16,8 @@ spec:
         prometheus.io/port: "8000"
         prometheus.io/path: /metrics
     spec:
+      # No <SERVICE>_PORT variables (incident #8: they collide with settings).
+      enableServiceLinks: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 10001

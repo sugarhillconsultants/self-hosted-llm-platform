@@ -1,0 +1,10 @@
+# Helm values for kedacore/keda, version in scripts/k8s-platform.sh.
+# Small demo cluster: one replica each, on the system nodes.
+operator:
+  replicaCount: 1
+metricsServer:
+  replicaCount: 1
+webhooks:
+  replicaCount: 1
+nodeSelector:
+  node-role: system

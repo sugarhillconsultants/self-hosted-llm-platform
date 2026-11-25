@@ -1,4 +1,4 @@
-# One GPU at most, Spot first, On-Demand when Spot has no capacity, and
+# At most two GPUs, Spot first, On-Demand when Spot has no capacity, and
 # removed when nothing is using it: the "scale to zero" is Karpenter
 # deleting the node once the vLLM pod is gone (ADR 0010).
 apiVersion: karpenter.sh/v1
@@ -41,9 +41,10 @@ spec:
           values: ["amd64"]
       # Replace any GPU node after a day, so a forgotten one can't age.
       expireAfter: 24h
-  # Hard cap: never more than one GPU, whatever is pending.
+  # Hard cap on GPUs, whatever is pending. 2 so Phase 3 can show KEDA scaling
+  # 0 -> 1 -> 2 -> 0; within the 8-vCPU Spot quota (2 x g6.xlarge).
   limits:
-    nvidia.com/gpu: 1
+    nvidia.com/gpu: 2
   disruption:
     consolidationPolicy: WhenEmptyOrUnderutilized
     consolidateAfter: 2m

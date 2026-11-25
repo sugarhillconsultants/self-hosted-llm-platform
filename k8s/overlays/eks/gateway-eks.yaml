@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: llm
+spec:
+  # One replica in Phase 3. KEDA sums demand across all gateway pods
+  # (aggregateFromKubeServiceEndpoints), so more would also be counted right.
+  replicas: 1
+  template:
+    spec:
+      # Never on the GPU node: the gateway must stay up when vLLM is at zero.
+      nodeSelector:
+        node-role: system
+      containers:
+        - name: gateway
+          env:
+            - name: SELF_HOSTED_URL
+              value: http://vllm.llm.svc.cluster.local:8000
+            - name: SELF_HOSTED_MODEL
+              value: qwen2.5-7b-instruct
+            # A 7B model generating 512 tokens at ~18 tokens/s needs ~30 s.
+            - name: SELF_HOSTED_TIMEOUT_S
+              value: "120"
+            # fallback | wait (ADR 0004). deploy-gateway.sh --policy wait switches.
+            - name: COLD_START_POLICY
+              value: fallback
+            - name: SELF_HOSTED_WAIT_S
+              value: "600"
+            - name: DEMAND_WINDOW_S
+              value: "120"

@@ -58,6 +58,15 @@ class Settings:
 
     max_tokens_limit: int = 2048
 
+    # Phase 3: scale-from-zero. What a request does when the self-hosted
+    # backend isn't running: "fallback" to the Claude API at once, or "wait"
+    # (retry) up to self_hosted_wait_s for it to start. ADR 0004.
+    cold_start_policy: str = "fallback"
+    self_hosted_wait_s: float = 600.0
+    # How long a request that wanted self-hosted but fell back still counts
+    # as demand (keeps vLLM requested while traffic is being served elsewhere).
+    demand_window_s: float = 120.0
+
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> "Settings":
         env = dict(os.environ if env is None else env)
@@ -73,6 +82,10 @@ class Settings:
         primary = env.get("PRIMARY_BACKEND", "self_hosted")
         if primary not in ("self_hosted", "anthropic"):
             raise ConfigError("PRIMARY_BACKEND must be self_hosted or anthropic")
+
+        policy = env.get("COLD_START_POLICY", "fallback")
+        if policy not in ("fallback", "wait"):
+            raise ConfigError("COLD_START_POLICY must be fallback or wait")
 
         return cls(
             jwt_secret=jwt_secret,
@@ -91,4 +104,7 @@ class Settings:
             primary_backend=primary,
             fallback_enabled=env.get("FALLBACK_ENABLED", "true").lower() == "true",
             max_tokens_limit=int(env.get("MAX_TOKENS_LIMIT", "2048")),
+            cold_start_policy=policy,
+            self_hosted_wait_s=float(env.get("SELF_HOSTED_WAIT_S", "600")),
+            demand_window_s=float(env.get("DEMAND_WINDOW_S", "120")),
         )

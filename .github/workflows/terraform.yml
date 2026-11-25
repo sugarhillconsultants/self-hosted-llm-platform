@@ -195,6 +195,23 @@ jobs:
         run: |
           ./scripts/k8s-platform.sh up
           { echo; kubectl get nodepool,ec2nodeclass; } | tee -a infra/terraform/envs/demo/nodes.txt
+      # The gateway image for this commit, into the ECR repo this apply just
+      # (re)created. The tag is the commit, so deploy-gateway.sh can find it.
+      - name: Build and push gateway image
+        if: inputs.action == 'apply'
+        working-directory: ${{ github.workspace }}
+        run: |
+          repo=$(terraform -chdir=infra/terraform/envs/demo output -raw gateway_repository_url)
+          tag="${GITHUB_SHA::12}"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "${repo%%/*}"
+          if aws ecr describe-images --repository-name "${repo#*/}" --image-ids "imageTag=$tag" >/dev/null 2>&1; then
+            echo "$repo:$tag already pushed (tags are immutable)"
+          else
+            docker build -t "$repo:$tag" gateway
+            docker push "$repo:$tag"
+          fi
+          echo "Gateway image: \`$repo:$tag\`" | sed 's/[0-9]\{12\}\.dkr/…dkr/' >> "$GITHUB_STEP_SUMMARY"
       - name: Verify nothing is left billing
         if: inputs.action == 'destroy'
         working-directory: ${{ github.workspace }}
