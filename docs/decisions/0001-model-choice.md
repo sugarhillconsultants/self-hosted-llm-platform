@@ -19,8 +19,9 @@ Claude API comparison means something.
 16 GiB). Apache-2.0, not gated, first-class vLLM support. About 15 GB of
 weights leaves about 5 GB of KV cache at `--gpu-memory-utilization=0.90`, so
 `--max-model-len=8192`. The weights are pinned to an exact Hugging Face commit
-(`scripts/pin-model.sh`). `g6.2xlarge` (same GPU, 32 GiB RAM) is allowed as a
-fallback if xlarge capacity is short.
+(`scripts/pin-model.sh`). `g6.2xlarge` (same GPU, 32 GiB RAM) and, since
+incident #10, `g5.xlarge`/`g5.2xlarge` (NVIDIA A10G, also 24 GB) are allowed
+as fallbacks when L4 capacity is short.
 
 ## Consequences
 - Every cold start downloads ~15 GB from Hugging Face. Measured in Phase 2,

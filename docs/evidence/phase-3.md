@@ -55,6 +55,63 @@ Expected cost (estimate): cluster ~1.5–2 h (~$0.40), GPU ~1.2 h On-Demand
   `watch.sh` against stubbed `kubectl`.
 - Not yet done: anything on EKS.
 
+## Run 1 (2026-11-25): no GPU capacity; KEDA and the fallback worked
+
+Environment from apply run 45680159979. Gateway image
+`…/self-hosted-llm-platform/gateway:3c2a23931c53`, fallback policy. Load
+20:14:03Z–20:33:03Z (`60:0,600:4,480:8,900:0`).
+
+```
+stage conc  reqs  ok  self_hosted  claude  errors  p50_s  p95_s  max_s
+    1    4   678 670            0     670       8   1.21   3.14   4.30
+    2    8   916 916            0     916       0   2.28   3.27   3.45
+
+== Scaling timeline (recorder samples every 10 s, so +/-10 s)
+  first request                20:15:03Z  +     0s
+  demand > 0                   20:15:07Z  +     4s
+  KEDA wants 1 replica         20:15:17Z  +    14s
+  GPU NodeClaim 1 created      —
+  KEDA wants 2 replicas        20:25:19Z  +   616s
+  last request finished        20:33:06Z  +  1083s
+  demand back to 0             20:35:10Z  +  1207s
+  KEDA wants 0 replicas        20:45:00Z  +  1797s
+
+== Scale-down, stage by stage
+  last request -> demand 0 (gateway window)           124s
+  demand 0 -> KEDA wants 0 (cooldown)                 590s
+```
+
+(The load generator's clock and the recorder's differ by about a minute
+in the "first request" line; the KEDA operator log below is authoritative.)
+
+KEDA (operator log and ScaledObject events):
+
+```
+2026-11-25T20:14:16Z scaleexecutor Successfully updated ScaleTarget {"Original Replicas Count": 0, "New Replicas Count": 1}
+2026-11-25T20:44:01Z scaleexecutor Successfully set ScaleTarget replicas count to ScaledObject minReplicaCount {"Original Replicas Count": 2, "New Replicas Count": 0}
+Normal  KEDAScaleTargetActivated    Scaled apps/v1.Deployment llm/vllm from 0 to 1, triggered by s0-metric-api-self_hosted_demand
+Normal  KEDAScaleTargetDeactivated  Deactivated apps/v1.Deployment llm/vllm from 2 to 0
+```
+
+vLLM pod events (last hour; earlier ones had expired):
+
+```
+Normal    Nominated                  Pod should schedule on: nodeclaim/gpu-dhsl9
+Warning   InsufficientCapacityError  NodeClaim gpu-vdmpl ... UnfulfillableCapacity: Unable to fulfill capacity due to your request configuration.
+Warning   FailedScheduling           Failed to schedule pod, nodepool requirements filtered out all available instance types
+Warning   InsufficientCapacityError  NodeClaim gpu-brhsx ... InsufficientInstanceCapacity: There is no Spot capacity available that matches your request.; UnfulfillableCapacity ...
+Normal    ScalingReplicaSet          Scaled down replica set vllm-697bdc49bb from 2 to 0
+```
+
+GPU offerings in this account (`describe-instance-type-offerings`):
+`g5.xlarge`, `g5.2xlarge`, `g6.xlarge`, `g6.2xlarge` in us-east-1a, b, c, d
+and f. The VPC's private subnets were in us-east-1a and b only. Incident #10.
+
+What this run proves: demand → KEDA → Deployment works from zero and back
+(including on Kubernetes 1.37, outside KEDA's tested window), and the fallback
+policy kept users answered through 18 minutes without any GPU. What it
+doesn't: anything about vLLM under KEDA. Run 2, after the incident #10 fix.
+
 ## 1. Platform and gateway
 
 ```

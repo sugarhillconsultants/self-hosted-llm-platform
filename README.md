@@ -4,7 +4,7 @@ Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-z
 
 <!-- Badges: fill in once each claim is true, not before. -->
 ![Status](https://img.shields.io/badge/Status-Phases_0--2_verified-yellow?style=flat-square)
-![Incidents](https://img.shields.io/badge/Incidents-9_documented-orange?style=flat-square)
+![Incidents](https://img.shields.io/badge/Incidents-10_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
 ![vLLM](https://img.shields.io/badge/vLLM-self--hosted-blue?style=flat-square)
@@ -183,7 +183,7 @@ computed in `scripts/cost-report.sh`, not estimated.
 
 <!-- One bullet per incident once they exist, linking to docs/incidents.md.
      Group them by category the way the throughline section does. -->
-Nine incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
+Ten incidents so far, documented in full in [`docs/incidents.md`](docs/incidents.md):
 
 - Request models defined inside the FastAPI app factory were silently read
   as missing query parameters, because of postponed annotations. Caught by
@@ -221,6 +221,10 @@ Nine incidents so far, documented in full in [`docs/incidents.md`](docs/incident
   node group first, then leaked interfaces, then everything else. (The first
   version of the fix targeted the whole EKS module, which owns the security
   groups too, and failed the same way; 9b.)
+- The first Phase 3 run never got a GPU: KEDA scaled vLLM correctly, but
+  every launch hit empty capacity, Spot and On-Demand, with only one GPU
+  family in two zones. The Claude fallback answered all 1,586 requests for
+  those 18 minutes. Now four zones and two GPU families.
 
 ## Running it
 

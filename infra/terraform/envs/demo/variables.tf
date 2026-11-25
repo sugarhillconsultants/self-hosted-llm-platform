@@ -28,3 +28,19 @@ variable "api_allowed_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "az_count" {
+  description = "How many availability zones to spread subnets across (GPU capacity, incident #10)."
+  type        = number
+  default     = 4
+  validation {
+    condition     = var.az_count >= 2 && var.az_count <= 4
+    error_message = "az_count must be 2-4 (EKS needs 2; the CIDR plan fits 4)."
+  }
+}
+
+variable "gpu_zone_instance_type" {
+  description = "Only use zones where this GPU instance type is offered."
+  type        = string
+  default     = "g6.xlarge"
+}
