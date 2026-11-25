@@ -1,0 +1,14 @@
+# The gateway on EKS, in front of vLLM. Applied by scripts/deploy-gateway.sh,
+# which substitutes the ECR image for the current commit. vLLM itself is
+# k8s/vllm; its autoscaling is k8s/keda.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+  - ../../gateway
+patches:
+  - path: gateway-eks.yaml
+images:
+  - name: gateway
+    newName: gateway
+    newTag: dev   # deploy-gateway.sh swaps in <ecr-repo>:<commit sha>

@@ -80,19 +80,35 @@ the cold-start timeline.
 
 ## Phase 3 — Scale-to-zero autoscaling on the right signal
 
-**Goal:** prove why CPU-based autoscaling is wrong for LLM serving, then do it
-right.
+**Goal:** scale vLLM 0 → 1 → N → 0 on what users are doing, and show with
+evidence why CPU couldn't have done it.
 
-- Install KEDA. `k8s/keda/`: ScaledObject on vLLM's waiting-requests metric
-  (via Prometheus), `minReplicaCount: 0`, cooldown tuned to model load time.
-- Cluster autoscaling for the GPU node group so a pod needing a GPU brings
-  up a node, and an idle node goes away.
-- Gateway behavior during cold start: queue with timeout, or fall back to
-  Claude immediately — make it a config flag and measure both.
+- The gateway reports **self-hosted demand**: peak concurrent requests
+  wanting the self-hosted model over 120 s, whichever backend answers
+  (`GET /scaling`, ADR 0012). It exists at zero replicas, unlike vLLM's own
+  queue metrics.
+- KEDA 2.21.1 scales vLLM on it with the `metrics-api` scaler, summed across
+  gateway pods: 4 per replica, 0–2 replicas, 10-minute cooldown (ADR 0002).
+  No Prometheus server needed. Karpenter (Phase 2) follows with GPU nodes;
+  the NodePool's GPU limit rises to 2.
+- Cold-start policy is a gateway setting, `fallback` (default: answer from
+  Claude, keep counting demand) or `wait` (retry vLLM up to 600 s), and both
+  are measured (ADR 0004).
+- The gateway runs on EKS (system nodes), image built by the apply workflow
+  and pushed to ECR by commit SHA; `scripts/deploy-gateway.sh`.
+- metrics-server, so vLLM CPU can be recorded next to demand.
+- `scripts/phase3-run.sh`: staged load (`loadtest/load.py`), a 10-second
+  recorder (`loadtest/watch.sh`) and a report (`loadtest/report.py`): the
+  0 → 1 → 2 → 0 timeline, what users saw each minute, CPU per demand level,
+  and scale-down broken into stages.
 
-**Gate:** evidence shows (1) a CPU-HPA run where replicas didn't move while
-latency climbed, (2) the KEDA run scaling 0→1→N→0 under `loadtest/`, with
-timestamps for node spin-up, model load, and first token.
+**Gate:** one recorded run where (1) vLLM CPU is shown against demand while
+replicas change (instead of a separate CPU-HPA run: the same evidence without
+more GPU hours), (2) KEDA scales 0 → 1 → 2 → 0 under load with timestamps for
+node launch, model ready and first self-hosted answer, (3) users get answers
+throughout the cold start (fallback policy), and (4) the wait policy's
+first-request latency is measured once. Plus an explanation of how long
+scale-down takes, stage by stage (Phase 2 measured 9 m 21 s, unexplained).
 
 ## Phase 4 — Gateway: routing, fallback, quotas, cost
 
@@ -183,6 +199,11 @@ to see which predictions were right and which failures were genuinely new.
 - Teardown racing Karpenter: `terraform destroy` before its nodes are gone.
 - Network deletion blocked by resources Terraform never created (leaked
   VPC CNI interfaces): happened, incident #9.
+- KEDA 2.21 on Kubernetes 1.37, one minor version past its tested window.
+- Fallbacks inflating demand: happened before AWS, caught in the local
+  end-to-end run (ADR 0012).
+- Spot reclaiming a GPU node mid-test; the gateway must fall back cleanly.
+- Port-forward dropping during a 30-minute load test.
 - KEDA scaling to zero and the first request timing out at the load balancer
   before a node is even provisioned.
 - OIDC trust-policy `sub` claim mismatch (the same class of bug as the Azure

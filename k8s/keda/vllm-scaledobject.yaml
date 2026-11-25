@@ -1,0 +1,52 @@
+# Scale vLLM on demand reported by the gateway, not on CPU (ADR 0002, 0012).
+#
+#   replicas = ceil(sum of self_hosted_demand across gateway pods / 4)
+#   0 -> 1 as soon as any request wants the self-hosted model
+#   back to 0 after 10 minutes with no demand
+#
+# Each vLLM replica needs its own GPU; Karpenter adds and removes the nodes.
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: vllm
+  namespace: llm
+spec:
+  scaleTargetRef:
+    name: vllm
+  minReplicaCount: 0
+  # Matches the gpu NodePool's limit of 2 GPUs.
+  maxReplicaCount: 2
+  pollingInterval: 15
+  # Seconds of zero demand before scaling to zero. Longer than a cold start
+  # (7m21s measured in Phase 2), so a short pause doesn't throw away a warm GPU.
+  cooldownPeriod: 600
+  advanced:
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 0
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+        # Between 1 and 2 replicas, the same patience as scale-to-zero.
+        scaleDown:
+          stabilizationWindowSeconds: 600
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+  triggers:
+    - type: metrics-api
+      metadata:
+        url: http://gateway.llm.svc.cluster.local:8000/scaling
+        format: json
+        valueLocation: self_hosted_demand
+        # Concurrent requests per replica before adding another. Phase 2 showed
+        # one L4 serving 4 streams at 3.9x single-stream throughput; 4 here is
+        # chosen to make the 1 -> 2 step happen in a demo, not a capacity limit.
+        targetValue: "4"
+        activationTargetValue: "0"
+        aggregateFromKubeServiceEndpoints: "true"
+        aggregationType: sum
+        timeout: "3s"

@@ -83,21 +83,23 @@ Design decisions are recorded as ADRs in [`docs/decisions/`](docs/decisions/).
 | `k8s/vllm/` | vLLM v0.34.0 serving Qwen2.5-7B-Instruct (weights pinned to a commit) on the GPU node; 25-minute startup probe for cold starts |
 | `k8s/karpenter/` | The `gpu` NodePool (g6 / NVIDIA L4, Spot first, max 1 GPU, removed when empty) and its EC2NodeClass |
 | `k8s/platform/` | Helm values for Karpenter and the NVIDIA device plugin |
-| `k8s/keda/` | Phase 3: scale vLLM on waiting-request queue depth, not CPU; to zero when idle |
+| `k8s/keda/` | KEDA ScaledObject: vLLM 0–2 replicas on gateway-reported demand (4 concurrent per replica), 10-minute cooldown |
+| `k8s/overlays/eks/` | The gateway on EKS: points at vLLM, system nodes only, cold-start policy setting |
+| `k8s/overlays/vllm-autoscaled/` | vLLM starting at 0 replicas plus its ScaledObject |
 | `k8s/gateway/` | Gateway Deployment and Service (Ingress and HPA come in Phase 4) |
 | `k8s/local-model/` | Phase 0 stand-in for vLLM: llama.cpp server on CPU, same OpenAI-compatible API |
 | `k8s/overlays/local/` | kind overlay: base + gateway + local model + NodePort on localhost:8000 |
 | `k8s/observability/` | Prometheus scrape config, Grafana dashboards (JSON), OTel collector |
-| `gateway/app/` | FastAPI gateway: client-credentials JWT auth, routing, fallback, Prometheus metrics (quotas, cost metering and OTel in Phases 4 and 6) |
+| `gateway/app/` | FastAPI gateway: client-credentials JWT auth, routing, fallback, cold-start policy, self-hosted demand for KEDA (`/scaling`), Prometheus metrics (quotas, cost metering and OTel in Phases 4 and 6) |
 | `gateway/app/providers/` | One adapter per backend behind a common interface: `openai_compat.py` (vLLM or llama.cpp) and `anthropic.py` |
-| `gateway/tests/` | Router, API and provider tests with mocked backends (41 tests) |
+| `gateway/tests/` | Router, API, provider, demand and cold-start-policy tests with mocked backends (58 tests) |
 | `evals/golden/` | Versioned golden eval sets (JSONL), one per capability |
 | `evals/scorers/` | Exact-match, groundedness, refusal-correctness, and LLM-as-judge scorers |
 | `evals/baselines/` | Last accepted scores per model/prompt version — what the CI gate compares against |
 | `prompts/` | Versioned prompt templates; a change here triggers the eval gate |
-| `loadtest/` | Load scripts that produce the latency/cost numbers in this README |
+| `loadtest/` | `load.py` (staged closed-loop load, one CSV row per request), `watch.sh` (10-second recorder of demand, replicas, GPU nodes, CPU), `report.py` (scaling timeline, per-minute user view, CPU vs demand, scale-down stages) |
 | `local/` | `kind-up.sh`, `kind-down.sh`, `smoke-test.sh`: the Phase 0 request path on a laptop, no GPU, no AWS bill |
-| `scripts/` | `up.sh` / `down.sh` (whole environment), `destroy-demo.sh` (staged destroy: cluster, leaked CNI interfaces, network), `k8s-platform.sh up/down` (Karpenter, device plugin, NodePool; removes GPU nodes before destroy), `vllm-smoke.sh` (Phase 2 gate), `pin-model.sh`, `whats-running.sh` |
+| `scripts/` | `up.sh` / `down.sh` (whole environment), `destroy-demo.sh` (staged destroy: cluster, leaked CNI interfaces, network), `k8s-platform.sh up/down` (Karpenter, device plugin, NodePool; removes GPU nodes before destroy), `vllm-smoke.sh` (Phase 2 gate), `deploy-gateway.sh` (gateway on EKS, `--policy fallback|wait`), `phase3-run.sh` (Phase 3 gate), `pin-model.sh`, `whats-running.sh` |
 | `.github/workflows/` | `test.yml` (gateway tests + image build); `terraform.yml` (plan on PR, manual apply/destroy); `eval-gate.yml`, `deploy.yml` in later phases |
 | `docs/` | Build plan, architecture, ADRs, incidents, evidence (screenshots, raw outputs) |
 
@@ -241,8 +243,6 @@ make running       # double-check
 
 <!-- Fill from real limitations found during the build, the same way
      incident #11 in log-anomaly-platform became a "next" item. -->
-- **Measure what the caller waits, not just the backend that answered.**
-  On the Phase 0 fallback run, `latency_ms` said 1.07 s while the caller
-  waited 3.08 s: the 2.00 s lost on the failed self-hosted attempt shows up
-  nowhere. Add an end-to-end request duration (response field + histogram,
-  labeled with whether a fallback happened) in Phase 4.
+- ~~**Measure what the caller waits, not just the backend that answered.**~~
+  Done in Phase 3: `total_latency_ms` in every response and the
+  `gateway_request_duration_seconds{served_by,fallback}` histogram.

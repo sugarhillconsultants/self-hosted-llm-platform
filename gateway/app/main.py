@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from . import metrics
 from .auth import current_client, issue_token, verify_client
 from .config import Settings
+from .demand import DemandTracker
 from .providers.anthropic import AnthropicProvider
 from .providers.base import Message, Usage
 from .providers.openai_compat import OpenAICompatProvider
@@ -50,6 +51,7 @@ class ChatResponse(BaseModel):
     served_by: str
     usage: Usage
     latency_ms: int
+    total_latency_ms: int | None = None
     fallback_reason: str | None = None
     finish_reason: str | None = None
 
@@ -71,7 +73,14 @@ def build_router(settings: Settings) -> Router:
             base_url=settings.anthropic_url,
         ),
     }
-    return Router(providers, settings.primary_backend, fallback_enabled=settings.fallback_enabled)
+    return Router(
+        providers,
+        settings.primary_backend,
+        fallback_enabled=settings.fallback_enabled,
+        demand=DemandTracker(window_s=settings.demand_window_s),
+        cold_start_policy=settings.cold_start_policy,
+        wait_s=settings.self_hosted_wait_s,
+    )
 
 
 def create_app(settings: Settings | None = None, router: Router | None = None) -> FastAPI:
@@ -87,6 +96,7 @@ def create_app(settings: Settings | None = None, router: Router | None = None) -
             log.propagate = False
         app.state.settings = settings or Settings.from_env()
         app.state.router = router or build_router(app.state.settings)
+        metrics.bind_demand(app.state.router.demand)
         yield
         await app.state.router.aclose()
 
@@ -101,6 +111,12 @@ def create_app(settings: Settings | None = None, router: Router | None = None) -
         # Unauthenticated by design: scraped from inside the cluster only.
         # The Service for it is ClusterIP; never expose this path on the ingress.
         return Response(generate_latest(metrics.REGISTRY), media_type=CONTENT_TYPE_LATEST)
+
+    @app.get("/scaling")
+    async def scaling(request: Request):
+        # KEDA's scaling signal (k8s/keda/vllm-scaledobject.yaml). Cluster-
+        # internal like /metrics; carries counts only, no request content.
+        return request.app.state.router.demand.snapshot()
 
     @app.post("/token", response_model=TokenResponse)
     async def token(body: TokenRequest, request: Request):
@@ -155,6 +171,7 @@ def create_app(settings: Settings | None = None, router: Router | None = None) -
             served_by=routed.served_by,
             usage=c.usage,
             latency_ms=int(routed.latency_s * 1000),
+            total_latency_ms=int(routed.total_s * 1000) if routed.total_s is not None else None,
             fallback_reason=routed.fallback_reason,
             finish_reason=c.finish_reason,
         )

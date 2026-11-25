@@ -11,6 +11,10 @@ source "$(dirname "$0")/_common.sh"
 
 KARPENTER_VERSION=1.15.3
 DEVICE_PLUGIN_VERSION=0.20.2
+# KEDA 2.21's tested window is Kubernetes 1.34-1.36; the cluster runs 1.37.
+# up() checks the operator and its metrics API are healthy (ADR 0002).
+KEDA_VERSION=2.21.1
+METRICS_SERVER_CHART_VERSION=3.14.0
 
 command -v helm >/dev/null || { echo "missing: helm (brew install helm)"; exit 1; }
 
@@ -51,6 +55,22 @@ up() {
     --version "$DEVICE_PLUGIN_VERSION" --namespace kube-system \
     -f "$ROOT/k8s/platform/nvidia-device-plugin-values.yaml" \
     --wait --timeout 5m
+
+  echo "== metrics-server chart $METRICS_SERVER_CHART_VERSION (kubectl top; CPU vs demand in Phase 3)"
+  helm repo add metrics-server https://kubernetes-sigs.github.io/metrics-server/ --force-update >/dev/null
+  helm upgrade --install metrics-server metrics-server/metrics-server \
+    --version "$METRICS_SERVER_CHART_VERSION" --namespace kube-system \
+    --wait --timeout 5m
+
+  echo "== KEDA $KEDA_VERSION"
+  helm repo add kedacore https://kedacore.github.io/charts --force-update >/dev/null
+  helm upgrade --install keda kedacore/keda \
+    --version "$KEDA_VERSION" --namespace keda --create-namespace \
+    -f "$ROOT/k8s/platform/keda-values.yaml" \
+    --wait --timeout 5m
+  # KEDA serves scaling metrics through the Kubernetes external metrics API;
+  # if that isn't Available, ScaledObjects silently never scale.
+  kubectl wait apiservice/v1beta1.external.metrics.k8s.io --for=condition=Available --timeout=3m
 
   echo "== GPU NodePool"
   kubectl apply -f "$ROOT/k8s/karpenter/"
@@ -103,6 +123,10 @@ down() {
   if cluster_exists; then
     kubeconfig
     echo "== Removing GPU workloads and Karpenter nodes"
+    # The ScaledObject first, or KEDA would scale vLLM straight back up.
+    if kubectl get crd scaledobjects.keda.sh >/dev/null 2>&1; then
+      kubectl delete scaledobjects --all -A --wait=true --timeout=2m || true
+    fi
     kubectl delete -f "$ROOT/k8s/vllm/deployment.yaml" --ignore-not-found --wait=true --timeout=2m || true
     if kubectl get crd nodepools.karpenter.sh >/dev/null 2>&1; then
       kubectl delete nodepool --all --wait=true --timeout=10m || true
@@ -113,6 +137,8 @@ down() {
       kubectl delete ec2nodeclass --all --wait=true --timeout=5m || true
     fi
     echo "== Removing add-ons"
+    helm uninstall keda -n keda --wait 2>/dev/null || true
+    helm uninstall metrics-server -n kube-system --wait 2>/dev/null || true
     helm uninstall nvdp -n kube-system --wait 2>/dev/null || true
     helm uninstall karpenter -n kube-system --wait 2>/dev/null || true
   else

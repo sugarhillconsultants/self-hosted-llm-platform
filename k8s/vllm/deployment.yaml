@@ -5,8 +5,10 @@ metadata:
   namespace: llm
   labels: {app: vllm}
 spec:
-  replicas: 1
-  # A second pod would need a second GPU, which the NodePool forbids.
+  # No replicas field: when the KEDA ScaledObject (k8s/keda) exists it owns
+  # the count, and a re-apply must not reset it. Without KEDA a new
+  # Deployment starts at 1, and scripts/vllm-smoke.sh scales it explicitly.
+  # Recreate: each pod needs its own GPU, so never run old and new together.
   strategy:
     type: Recreate
   selector:

@@ -17,6 +17,11 @@ if grep -q 'MODEL_REVISION=SET-ME' "$ROOT/k8s/vllm/kustomization.yaml"; then
   echo "Pin the model first: ./scripts/pin-model.sh"; exit 1
 fi
 kubectl get nodepool gpu >/dev/null 2>&1 || { echo "No gpu NodePool: run ./scripts/k8s-platform.sh up"; exit 1; }
+if kubectl -n "$NS" get scaledobject vllm >/dev/null 2>&1; then
+  echo "KEDA controls vLLM's replicas (ScaledObject vllm), and this script scales it by hand."
+  echo "Use ./scripts/phase3-run.sh, or remove it first: kubectl -n $NS delete scaledobject vllm"
+  exit 1
+fi
 
 T0=$(date +%s)
 ts() { echo "[$(date -u +%H:%M:%SZ) +$(( $(date +%s) - T0 ))s] $*"; }
