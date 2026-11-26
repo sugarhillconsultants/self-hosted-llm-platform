@@ -32,6 +32,27 @@ def utc(epoch):
     return time.strftime("%H:%M:%SZ", time.gmtime(epoch))
 
 
+def val(r, key):
+    """A recorder value, or None if that sample failed (blank cell).
+
+    A failed curl or kubectl leaves the cell empty. Reading it as 0 made
+    "demand back to 0" fire on a port-forward blip (54 s instead of ~120 s
+    in the wait-policy run), so blanks never satisfy a milestone.
+    """
+    v = (r.get(key) or "").strip()
+    if not v:
+        return None
+    try:
+        return float(v)
+    except ValueError:
+        return None
+
+
+def is_(r, key, test):
+    v = val(r, key)
+    return v is not None and test(v)
+
+
 def first(rows, pred, after=0.0):
     for r in rows:
         if num(r["epoch"]) >= after and pred(r):
@@ -49,25 +70,30 @@ def main(watch_path, req_path):
     sh = [r for r in reqs if r.get("served_by") == "self_hosted"]
     t_first_sh = num(sh[0]["t_start"]) + num(sh[0]["client_s"]) if sh else None
 
-    desired = lambda r: num(r["hpa_desired"] or r["vllm_spec"])  # noqa: E731
+    def desired(r, test):
+        v = val(r, "hpa_desired")
+        if v is None:
+            v = val(r, "vllm_spec")
+        return v is not None and test(v)
+
     m = {}
     m["first request"] = t0
-    m["demand > 0"] = first(w, lambda r: num(r["demand"]) > 0, t0 - 10)
-    m["KEDA wants 1 replica"] = first(w, lambda r: desired(r) >= 1, t0 - 10)
-    m["GPU NodeClaim 1 created"] = first(w, lambda r: num(r["gpu_nodeclaims"]) >= 1, t0 - 10)
-    m["GPU node 1 Ready"] = first(w, lambda r: num(r["gpu_nodes_ready"]) >= 1, t0 - 10)
-    m["vLLM replica 1 Ready"] = first(w, lambda r: num(r["vllm_ready"]) >= 1, t0 - 10)
+    m["demand > 0"] = first(w, lambda r: is_(r, "demand", lambda v: v > 0), t0 - 10)
+    m["KEDA wants 1 replica"] = first(w, lambda r: desired(r, lambda v: v >= 1), t0 - 10)
+    m["GPU NodeClaim 1 created"] = first(w, lambda r: is_(r, "gpu_nodeclaims", lambda v: v >= 1), t0 - 10)
+    m["GPU node 1 Ready"] = first(w, lambda r: is_(r, "gpu_nodes_ready", lambda v: v >= 1), t0 - 10)
+    m["vLLM replica 1 Ready"] = first(w, lambda r: is_(r, "vllm_ready", lambda v: v >= 1), t0 - 10)
     m["first self-hosted answer"] = t_first_sh
-    m["KEDA wants 2 replicas"] = first(w, lambda r: desired(r) >= 2, t0)
-    m["GPU node 2 Ready"] = first(w, lambda r: num(r["gpu_nodes_ready"]) >= 2, t0)
-    m["vLLM replica 2 Ready"] = first(w, lambda r: num(r["vllm_ready"]) >= 2, t0)
+    m["KEDA wants 2 replicas"] = first(w, lambda r: desired(r, lambda v: v >= 2), t0)
+    m["GPU node 2 Ready"] = first(w, lambda r: is_(r, "gpu_nodes_ready", lambda v: v >= 2), t0)
+    m["vLLM replica 2 Ready"] = first(w, lambda r: is_(r, "vllm_ready", lambda v: v >= 2), t0)
     m["last request finished"] = t_last_req
-    m["demand back to 0"] = first(w, lambda r: num(r["demand"]) == 0, t_last_req)
-    m["KEDA wants 0 replicas"] = first(w, lambda r: desired(r) == 0, t_last_req)
+    m["demand back to 0"] = first(w, lambda r: is_(r, "demand", lambda v: v == 0), t_last_req)
+    m["KEDA wants 0 replicas"] = first(w, lambda r: desired(r, lambda v: v == 0), t_last_req)
     # Only after KEDA asked for zero: the earlier 2 -> 1 step also deletes a NodeClaim.
     t_zero = m["KEDA wants 0 replicas"] or t_last_req
-    m["GPU NodeClaim deleting"] = first(w, lambda r: num(r["gpu_nodeclaims_deleting"]) > 0, t_zero)
-    m["GPU NodeClaims gone"] = first(w, lambda r: num(r["gpu_nodeclaims"]) == 0, t_zero)
+    m["GPU NodeClaim deleting"] = first(w, lambda r: is_(r, "gpu_nodeclaims_deleting", lambda v: v > 0), t_zero)
+    m["GPU NodeClaims gone"] = first(w, lambda r: is_(r, "gpu_nodeclaims", lambda v: v == 0), t_zero)
 
     print("== Scaling timeline (recorder samples every 10 s, so +/-10 s)")
     for name, t in m.items():
@@ -94,7 +120,8 @@ def main(watch_path, req_path):
     print("\n== vLLM CPU vs demand (samples with vLLM Ready; is CPU a usable signal?)")
     by_demand = {}
     for r in w:
-        if num(r["vllm_ready"]) >= 1 and r["vllm_cpu_m"]:
+        if is_(r, "vllm_ready", lambda v: v >= 1) and val(r, "vllm_cpu_m") is not None \
+                and val(r, "demand") is not None:
             by_demand.setdefault(int(num(r["demand"])), []).append(num(r["vllm_cpu_m"]) / max(1, num(r["vllm_ready"])))
     if by_demand:
         print("  demand  samples  CPU per replica (millicores): mean  min  max")
@@ -103,6 +130,10 @@ def main(watch_path, req_path):
             print(f"  {d:6} {len(v):8}  {mean(v):26.0f} {min(v):4.0f} {max(v):4.0f}")
     else:
         print("  no CPU samples (is metrics-server installed?)")
+
+    blanks = sum(1 for r in w if val(r, "demand") is None)
+    if blanks:
+        print(f"\n  ({blanks} recorder samples had no demand reading and were skipped)")
 
     print("\n== Scale-down, stage by stage")
     stages = [

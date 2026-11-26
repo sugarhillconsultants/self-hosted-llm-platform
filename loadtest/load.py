@@ -141,9 +141,11 @@ def summarize(rows, stages):
         cl = sum(1 for r in ok if r["served_by"] == "anthropic")
         print(f"{n:5} {conc:4} {len(rs):5} {len(ok):3} {sh:12} {cl:7} {len(rs) - len(ok):7} "
               f"{pct(lat, 50):6.2f} {pct(lat, 95):6.2f} {max(lat) if lat else float('nan'):6.2f}")
-    first_sh = next((r for r in rows if r.get("served_by") == "self_hosted"), None)
-    if first_sh and rows:
-        print(f"\nfirst self-hosted answer: {float(first_sh['t_start']) - float(rows[0]['t_start']):.0f}s "
+    # When the answer arrived, not when its request started: under the wait
+    # policy the first request starts at 0 s and is answered ~400 s later.
+    done = [float(r["t_start"]) + float(r["client_s"]) for r in rows if r.get("served_by") == "self_hosted"]
+    if done and rows:
+        print(f"\nfirst self-hosted answer: {min(done) - float(rows[0]['t_start']):.0f}s "
               "after the first request")
 
 

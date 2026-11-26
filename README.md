@@ -3,7 +3,7 @@
 Self-hosted open-weight LLM serving on AWS EKS (Terraform, vLLM, KEDA scale-to-zero), with an LLM gateway for routing, fallback and cost control, and a CI eval gate that blocks regressions.
 
 <!-- Badges: fill in once each claim is true, not before. -->
-![Status](https://img.shields.io/badge/Status-Phases_0--2_verified-yellow?style=flat-square)
+![Status](https://img.shields.io/badge/Status-Phases_0--3_verified-yellow?style=flat-square)
 ![Incidents](https://img.shields.io/badge/Incidents-10_documented-orange?style=flat-square)
 ![EKS](https://img.shields.io/badge/AWS-EKS-FF9900?style=flat-square&logo=amazonaws&logoColor=white)
 ![Terraform](https://img.shields.io/badge/Terraform-IaC-7B42BC?style=flat-square&logo=terraform&logoColor=white)
@@ -143,15 +143,26 @@ Scale vLLM to zero                     → GPU node removed by Karpenter after 9
 Cost of the phase                      → ~$2 estimated, ~$0.23 of it the passing run
 ```
 
-AWS (Phases 3–7), not yet run:
+Phase 3, autoscaling on demand, not CPU (us-east-1, 2026-11-26). Full output:
+[`docs/evidence/phase-3.md`](docs/evidence/phase-3.md).
 
 ```
-first request after idle (cold start)  → <seconds to first token, node spin-up time>
+KEDA on gateway demand, 0 → 1 → 2 → 0  → first self-hosted answer 445 s after the first request
+Users during the cold start (fallback)  → all answered by Claude, ~1.1 s median (499 requests)
+Cold start with the wait policy         → first user waited 403 s, 0 Claude requests, 0 errors
+vLLM CPU, idle vs 8 concurrent clients  → ~14m vs mean 359m: not a usable scaling signal
+One L4 replica, 4 → 8 clients           → p50 7.5 s → 7.6 s (target of 4/replica is too low)
+Last request → no GPU                   → 22 m 11 s = 2 m window + 10 m cooldown + 2 m Karpenter + 7–8 m EC2 terminating the GPU
+Cost of the phase                       → ~$2.40 estimated AWS, plus fallback API usage
+```
+
+AWS (Phases 4–7), not yet run:
+
+```
 POST /v1/chat (self-hosted)            → <response, latency, tokens>
 POST /v1/chat (vLLM killed mid-test)   → <fallback to Claude API, latency delta>
 quota exceeded for client X            → <429 + header>
 eval gate on a deliberately bad prompt → <PR blocked, scores vs baseline>
-KEDA scale-up under load               → <replicas over time>
 ```
 
 ### Self-hosted vs API: the actual numbers
@@ -247,6 +258,13 @@ make running       # double-check
 
 <!-- Fill from real limitations found during the build, the same way
      incident #11 in log-anomaly-platform became a "next" item. -->
+- **Set the KEDA target from measured capacity, not a guess.** Phase 3's
+  target of 4 concurrent requests per replica launched a second GPU that
+  wasn't needed: one L4 served 8 clients with the same median latency.
+  Phase 4's load test finds the knee, and the target follows from it.
+- **Cold-start policy per client, not per gateway.** Fallback for
+  interactive callers, wait for batch or for data that must stay in the
+  cluster. Both are measured; today it is one setting for everyone.
 - ~~**Measure what the caller waits, not just the backend that answered.**~~
   Done in Phase 3: `total_latency_ms` in every response and the
   `gateway_request_duration_seconds{served_by,fallback}` histogram.

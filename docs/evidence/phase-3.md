@@ -112,52 +112,200 @@ What this run proves: demand → KEDA → Deployment works from zero and back
 policy kept users answered through 18 minutes without any GPU. What it
 doesn't: anything about vLLM under KEDA. Run 2, after the incident #10 fix.
 
-## 1. Platform and gateway
+## Run 2 (2026-11-26): the gate run, fallback policy
+
+Environment from the apply after the incident #10 fix (four zones, g5 and
+g6). Fallback policy, profile `60:0,600:4,480:8,900:0`, results folder
+`loadtest/results/20261126T120826Z` (gitignored; numbers below transcribed
+from `report.py` and `load.py` output). Times are seconds from the first
+request; the recorder samples every 10 s, so ±10 s.
+
+### Scaling timeline: 0 → 1 → 2 → 0
+
+| Milestone | +s | Detail |
+|---|---|---|
+| demand > 0 | 5 | |
+| KEDA wants 1 replica | 5 | |
+| GPU NodeClaim 1 created | 25 | |
+| GPU node 1 Ready | 55 | `g6.xlarge`, On-Demand, us-east-1a |
+| vLLM replica 1 Ready | 435 | model load + compile, as in Phase 2 |
+| first self-hosted answer | 445 | |
+| KEDA wants 2 replicas | 606 | load stepped from 4 to 8 clients at ~600 |
+| GPU node 2 Ready | 666 | `g6.2xlarge`, On-Demand, us-east-1a |
+| vLLM replica 2 Ready | 1006 | |
+| last request finished | 1085 | |
+| demand back to 0 | 1206 | |
+| KEDA wants 0 replicas | 1797 | |
+| GPU NodeClaim deleting | 1938 | |
+| GPU NodeClaims gone | 2416 | |
+
+GPU launch attempts (from vLLM pod events): 2 nominated, 2 failed for lack
+of capacity (1 of them "no Spot capacity"), then On-Demand succeeded. Spot
+`g5`/`g6` was never available in this account during Phase 3.
+
+### What users saw (fallback policy)
+
+| Stage | Clients | Requests | Self-hosted | Claude | Errors | p50 | p95 |
+|---|---|---|---|---|---|---|---|
+| 1 | 4 | 582 | 79 | 499 | 4 | 1.18 s | 7.52 s |
+| 2 | 8 | 441 | 441 | 0 | 0 | 7.62 s | |
+
+Everyone was answered through the 7-minute cold start: Claude took the
+first 445 s at a ~1.1 s median, then vLLM took over. The 4 errors were in
+stage 1; Phase 4's fault-injection gate is where errors get driven to zero.
+
+**One L4 replica handled 8 concurrent clients with flat latency**: 7.6 s
+median at 8 clients against 7.5 s at 4, with throughput rising from about 30
+to about 55 requests a minute. So the KEDA target of 4 per replica is too
+low; the second GPU was not needed. Not tuned here: the Phase 4 load test
+measures real per-replica capacity, and the target follows from it.
+
+### CPU vs demand: why CPU couldn't have scaled this
+
+| Demand | vLLM CPU per replica (millicores) |
+|---|---|
+| 0 (idle, model loaded) | ~14 |
+| 4 | mean 134 (62–973) |
+| 8 | mean 359 (14–4245; the peak is replica 2's startup compile) |
+
+At zero replicas there is no CPU to measure, so CPU can never start the
+0 → 1. When vLLM is running, its CPU is a fraction of one core whether it
+is idle or saturated with work (the work is on the GPU), and the largest
+spike in the run is a replica compiling at startup, not demand. An HPA on
+CPU would have scaled on the wrong event, or not at all. ADR 0002 holds.
+
+### Scale-down, stage by stage
+
+| Stage | Run 2 | Cause |
+|---|---|---|
+| last request → demand 0 | 121 s | gateway's 120 s peak window (ADR 0012) |
+| demand 0 → KEDA wants 0 | 591 s | KEDA `cooldownPeriod: 600` |
+| KEDA wants 0 → NodeClaim deleting | 141 s | Karpenter `consolidateAfter: 2m` + its decision loop |
+| NodeClaim deleting → gone | 478 s | drain, then EC2 terminating a GPU instance |
+| **total: last request → no GPU** | **1331 s (22 m 11 s)** | |
+
+This explains Phase 2's unexplained 9 m 21 s too: that run had no gateway
+window and no KEDA cooldown, only the last two stages (~2 + ~7 min).
+
+About 12 of the 22 minutes are choices (window and cooldown) that trade GPU
+cost against re-cold-starting for a user who comes back. The last ~8 minutes
+are Karpenter and EC2; run 3's Karpenter log (below) shows that nearly all of
+it is EC2 terminating the GPU instance, with nothing left to drain. Not
+something this project can tune. Whether EC2 bills those minutes is a
+question for Cost Explorer.
+
+## Run 3 (2026-11-26): wait policy, first request from zero
+
+`./scripts/deploy-gateway.sh --policy wait`, then
+`./scripts/phase3-run.sh --profile 30:0,600:1,900:0` (one client), results
+folder `loadtest/results/20261126T131455Z`.
+
+| | Wait policy (this run) |
+|---|---|
+| GPU node Ready | +64 s |
+| vLLM Ready | +394 s |
+| **first request answered** | **403.04 s, by vLLM** |
+| requests | 24, all self-hosted |
+| Claude requests | 0 |
+| errors | 0 |
+| p50 after warm-up | 7.31 s |
+| launch attempts | 1 nominated, 1 failed (no Spot), On-Demand succeeded |
+
+Scale-down as first printed: 54 s / 670 s / 130 s / 420 s = 1274 s. The
+54 s is wrong: the window is 120 s, and 54 + 670 = 724 ≈ 120 + 600. One
+`/scaling` sample came back blank (port-forward blip) and the report read it
+as demand 0. Fixed: `report.py` now skips blank samples and says how many it
+skipped. The recorder rows around it:
 
 ```
-<k8s-platform.sh up: KEDA, metrics-server; deploy-gateway.sh output>
+time_utc,demand,wanting_now
+13:25:36Z,1,1
+13:25:46Z,1,0          <- last request done; the 120 s peak window starts
+13:26:29Z,1,0
+13:26:58Z,,            <- failed sample, read as 0 before the fix
+13:27:02Z,1,0
+13:27:35Z,1,0
+13:27:43Z,0,0          <- real end of the window, ~120 s after 13:25:4x
 ```
 
-## 2. Scaling timeline (fallback policy)
+Corrected split: ~120 s window, ~600 s cooldown, then Karpenter (below);
+the total, 1274 s, was right all along.
+
+Karpenter's own log for the final GPU node:
 
 ```
-<report.py: "Scaling timeline">
+13:38:54.326Z  disrupting node(s)   command: Empty/...
+13:38:54.420Z  tainted node         ip-10-40-27-101.ec2.internal
+13:45:48.511Z  deleted node         ip-10-40-27-101.ec2.internal
+13:45:48.747Z  deleted nodeclaim    gpu-hn97l
 ```
 
-## 3. What users saw, per minute
+The node was **Empty** (vLLM already gone), so there was nothing to drain:
+the 6 m 54 s between taint and "deleted node" is Karpenter waiting for EC2
+to finish terminating the GPU instance before it releases the node. That is
+the "drain + terminate" stage in both runs, and it is EC2, not Kubernetes.
+
+`load.py` also printed "first self-hosted answer: 0s", measured
+from the request's start rather than its answer; fixed to start + duration.
+
+### Fallback vs wait (ADR 0004, measured)
+
+| Cold-start policy | During the cold start | Claude requests | Errors |
+|---|---|---|---|
+| **fallback** (run 2) | every user answered, ~1.1 s median, by Claude | 499 | 4 |
+| **wait** (run 3) | first user waited 6 m 43 s; nobody answered until vLLM was up | 0 | 0 |
+
+Fallback is the default and stays the default for interactive clients.
+Wait suits batch clients, or data that must not leave the cluster. That
+makes it a per-client setting, not a global one: Phase 4's routing work.
+
+## Teardown
 
 ```
-<report.py: "What users saw, per minute">
+gh run watch  → ✓ Run terraform (45833920591) completed with 'success'
+                ✓ Remove Karpenter nodes and add-ons
+                ✓ destroy
+                ✓ Verify nothing is left billing   (15m1s)
+
+make running
+Checking us-east-1 as romeopeay
+
+ok EKS clusters: none
+ok NAT gateways: none
+ok Running EC2 instances: none
+ok Load balancers: none
+ok Unattached EBS volumes: none
+ok Unassociated Elastic IPs: none
+
+Verified: nothing billable by the hour in us-east-1.
 ```
 
-## 4. CPU vs demand
-
-```
-<report.py: "vLLM CPU vs demand">
-```
-
-## 5. Scale-down, stage by stage
-
-```
-<report.py: "Scale-down, stage by stage">, plus the relevant Karpenter log lines
-```
-
-## 6. Wait policy: first-request latency from zero
-
-```
-<report.py for the --policy wait run>
-```
-
-## 7. Teardown
-
-```
-<destroy run, make running>
-```
+The staged destroy (incidents #9, #9b) went through first time.
 
 ## Cost of this phase
 
-| Item | Window (UTC) | Hours | Rate | Est. cost |
+Estimate from the timelines above at ~$0.23/h for the cluster, $0.805/h
+On-Demand `g6.xlarge`, $0.978/h `g6.2xlarge`. Window edges are approximate.
+
+| Session | What happened | Cluster h | GPU h | Est. cost |
 |---|---|---|---|---|
-| Cluster | | | ~$0.23/h | |
-| GPU nodes (type, Spot/On-Demand) | | | | |
-| Claude API during cold starts | | | | |
+| 2026-11-25 | Run 1: no GPU capacity (#10), destroyed | ~2 | 0 | ~$0.46 |
+| 2026-11-26 | Runs 2 and 3, destroy | ~2.5 | ~0.65 g6.xl + ~0.5 g6.2xl + ~0.4 g6.xl | ~$1.95 |
+| **Total AWS** | | **~4.5** | **~1.55** | **~$2.40** |
+
+Plus Claude API usage for about 2,100 short fallback answers (1,586 in run 1,
+499 in run 2; `max_tokens` 128): read from the Console's usage page. To do:
+replace the estimate with Cost Explorer (`Project = self-hosted-llm-platform`).
+
+## Phase 3 result
+
+**Gate passed on 2026-11-26.** On queued demand from the gateway, not CPU,
+KEDA scaled vLLM 0 → 1 → 2 → 0, and Karpenter followed with GPU nodes: first
+self-hosted answer 445 s after the first request, every user answered by
+the Claude fallback in the meantime, and no GPU 22 m 11 s after the last
+request, each stage of which is accounted for. CPU was shown to be unusable
+as the signal (nothing to measure at zero; under a core whether idle or
+busy). The wait policy's cost was measured once: 403 s for the first user,
+zero API calls. One incident (#10, GPU capacity) and two report bugs found
+on the way. Carried into Phase 4: the per-replica target (one L4 handled 8
+clients flat) and per-client cold-start policy.
