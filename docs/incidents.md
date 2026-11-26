@@ -304,6 +304,45 @@ the node group resource itself,
 (read from the module source, not assumed). Stage 3 now cleans up and retries
 once if a `DependencyViolation` still slips through.
 
+## 10. No GPU capacity in two zones for 18 minutes: KEDA scaled correctly, Karpenter couldn't launch anything, and the fallback carried every request
+
+The first Phase 3 run looked like a failure: 1,586 requests answered and
+not one by vLLM. The report narrowed it down. Demand appeared 4 seconds into
+the load, KEDA wanted 1 replica 10 seconds later and 2 when the load doubled,
+then went back to 0 after its cooldown. KEDA's own events confirmed it really
+scaled the Deployment: `Scaled apps/v1.Deployment llm/vllm from 0 to 1` at
+20:14:16 and `Deactivated ... from 2 to 0` at 20:44:01. But `GPU NodeClaim 1
+created` never appeared in the 10-second recorder.
+
+The vLLM pods' events showed why. Karpenter nominated NodeClaims again and
+again, and every launch failed within seconds, between recorder samples:
+`InsufficientInstanceCapacity: There is no Spot capacity available that
+matches your request` and `UnfulfillableCapacity: Unable to fulfill capacity`,
+On-Demand included, until Karpenter marked every offering unavailable for a
+while (`nodepool requirements filtered out all available instance types`),
+then tried again. The NodePool allowed one GPU family (`g6`) in two sizes,
+and the VPC spanned two availability zones. Every family × size × zone ×
+Spot/On-Demand combination is a separate capacity pool, and all 8 of these
+were empty for the whole run. `g6.xlarge` and `g5.xlarge` are offered in five
+of us-east-1's zones in this account; the VPC used two.
+
+**What went right:** this is exactly the case the fallback policy exists for.
+For 18 minutes there was no GPU to be had, and users got 1,586 answers at a
+median of 1.2 to 2.3 s, with 8 errors (port-forward drops), from the Claude API.
+Had the policy been "wait", every one of those requests would have waited
+10 minutes and then fallen back anyway.
+
+**Fixes:** the VPC now spans up to four zones, chosen from those where AWS
+offers `g6.xlarge` in this account (`aws_ec2_instance_type_offerings`), not
+the first two alphabetically. The NodePool allows `g5` (NVIDIA A10G, also
+24 GB) as well as `g6`. Together that is 32 capacity pools instead of 8
+(2 families × 2 sizes × 4 zones × Spot or On-Demand). And because failed
+launches are too fast for the recorder, `phase3-run.sh` now saves the vLLM
+pods' events and reports nominated NodeClaims, failed launches, and how many
+found no Spot capacity. **Not fixable from here:** if a region has no GPU
+capacity of any kind, more pools only lower the odds. The fallback is the
+real answer, and it worked.
+
 ---
 
 ## After all fixes: a genuine, verified end-to-end pass

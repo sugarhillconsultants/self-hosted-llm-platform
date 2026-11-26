@@ -13,11 +13,26 @@ data "aws_availability_zones" "available" {
   }
 }
 
+# Zones that actually offer the GPU instance type. Each zone x instance type x
+# capacity type is a separate pool, so more zones means more chances of a GPU
+# when one pool is empty (incident #10: two zones, no capacity for 18 minutes).
+data "aws_ec2_instance_type_offerings" "gpu" {
+  location_type = "availability-zone"
+  filter {
+    name   = "instance-type"
+    values = [var.gpu_zone_instance_type]
+  }
+}
+
 data "aws_caller_identity" "current" {}
 
 locals {
   name = "${var.project}-demo"
-  azs  = slice(data.aws_availability_zones.available.names, 0, 2)
+  gpu_zones = sort(setintersection(
+    data.aws_availability_zones.available.names,
+    data.aws_ec2_instance_type_offerings.gpu.locations,
+  ))
+  azs = slice(local.gpu_zones, 0, min(var.az_count, length(local.gpu_zones)))
 }
 
 # --- Network -------------------------------------------------------------------
@@ -30,8 +45,9 @@ module "vpc" {
   cidr = "10.40.0.0/16"
   azs  = local.azs
 
-  private_subnets = ["10.40.0.0/19", "10.40.32.0/19"]
-  public_subnets  = ["10.40.128.0/24", "10.40.129.0/24"]
+  # One /19 private and one /24 public subnet per zone (up to 4 zones).
+  private_subnets = [for i in range(length(local.azs)) : cidrsubnet("10.40.0.0/16", 3, i)]
+  public_subnets  = [for i in range(length(local.azs)) : cidrsubnet("10.40.128.0/17", 7, i)]
 
   # One NAT gateway, not one per AZ: an AZ outage takes out egress for the
   # other AZ's nodes. Accepted for a demo; it halves the NAT cost.

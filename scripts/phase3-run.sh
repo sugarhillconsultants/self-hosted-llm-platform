@@ -58,8 +58,24 @@ kubectl -n kube-system logs deploy/karpenter --since=2h 2>/dev/null \
   | grep -E 'disrupting|launched nodeclaim|registered nodeclaim|initialized nodeclaim|deleted node|terminat|UnfulfillableCapacity|InsufficientInstanceCapacity' \
   > "$RUN-karpenter.log" || true
 kubectl -n keda logs deploy/keda-operator --since=2h 2>/dev/null | grep -iE 'error|vllm' | tail -50 > "$RUN-keda.log" || true
+# Failed GPU launches: they fail within seconds, between the recorder's
+# 10-second samples, so the pod events are the record (incident #10).
+kubectl -n "$NS" get events -o json 2>/dev/null \
+  | jq -r '.items[] | select(.involvedObject.name|test("^vllm")) | select(.reason=="InsufficientCapacityError" or .reason=="FailedScheduling" or .reason=="Nominated")
+           | [(.lastTimestamp // .eventTime), .reason, .involvedObject.name, (.message|gsub("\n";" "))] | @tsv' \
+  > "$RUN-events.tsv" || true
 
 echo
-"$PY" "$ROOT/loadtest/report.py" "$RUN-watch.csv" "$RUN-requests.csv" | tee "$RUN-report.txt"
+{
+  "$PY" "$ROOT/loadtest/report.py" "$RUN-watch.csv" "$RUN-requests.csv"
+  echo
+  echo "== GPU launch attempts (pod events)"
+  # grep -c prints 0 and exits 1 when nothing matches; don't add a second 0.
+  count() { grep -c "$1" "$RUN-events.tsv" 2>/dev/null || true; }
+  printf '  NodeClaims nominated:          %s\n' "$(count $'\tNominated\t')"
+  printf '  Launches failed, no capacity:  %s\n' "$(count InsufficientCapacityError)"
+  printf '    of which Spot had none:      %s\n' "$(count 'no Spot capacity')"
+  printf '  "filtered out all types":      %s\n' "$(count 'filtered out all available instance types')"
+} | tee "$RUN-report.txt"
 echo
-echo "Files: $RUN-{watch,requests}.csv, $RUN-{load,report}.txt, $RUN-{karpenter,keda}.log"
+echo "Files: $RUN-{watch,requests}.csv, $RUN-{load,report}.txt, $RUN-{karpenter,keda}.log, $RUN-events.tsv"
